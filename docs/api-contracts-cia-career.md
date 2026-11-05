@@ -473,11 +473,58 @@ The model is configurable with `GROQ_MODEL`. Missing configuration, a failed
 request, or an invalid model response is logged and falls back to local
 benchmark-based suggestions.
 
+## 9. Score a resume against a job description
+
+`POST /candidate/cia/career/ats-score`
+Route name: `cia.career.ats_score`
+
+Requires an authenticated candidate. Send a `multipart/form-data` request
+containing a PDF resume and the target job description. The uploaded file is
+temporarily stored for processing and deleted after the scoring attempt. The
+candidate identifier, original filename, job description, and result are logged
+in `cia_search_logs`; the resume contents are not stored in that log.
+
+### Request fields
+
+| Name | Type | Required | Constraints |
+| --- | --- | --- | --- |
+| `resume` | file | Yes | PDF, maximum 10 MB |
+| `job_description` | string | Yes | Non-empty, maximum 12,000 characters |
+
+### `200 OK`
+
+```json
+{
+  "log_id": 18,
+  "total_score": 82,
+  "keywords": 80,
+  "formatting": 90,
+  "experience": 75,
+  "skills": 84,
+  "keyword_gaps": ["CI/CD"],
+  "rewrite_suggestions": [
+    {
+      "section": "Experience",
+      "current_issue": "Impact is not quantified.",
+      "suggestion": "Add a truthful metric for the project outcome."
+    }
+  ]
+}
+```
+
+The score and four category values are integers between 0 and 100.
+`rewrite_suggestions` contains actionable section-level items. The Python
+pipeline uses Docling for PDF/DOCX extraction; this authenticated endpoint
+currently accepts PDF uploads. Configure `GROQ_API_KEY`, optionally set
+`GROQ_MODEL`, and use `CIA_PYTHON_BINARY` to select the Python executable used
+by Laravel.
+
 ## Errors
 
 The original routes use the common error examples below. Laravel validation
 for the skill-gap request returns `422 Unprocessable Entity` when
-`target_role` is missing or invalid.
+`target_role` is missing or invalid. Resume scoring validation returns `422`
+when the PDF or job description is missing or invalid.
 
 ### `400 Bad Request`
 

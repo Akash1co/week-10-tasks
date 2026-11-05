@@ -10,6 +10,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Symfony\Component\Process\Exception\ProcessStartFailedException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
@@ -104,6 +105,120 @@ class CiaController extends \Illuminate\Routing\Controller
             'priority_learning' => $analysis['priority_learning'],
             'radar_data' => $radarData,
         ]);
+    }
+
+    public function atsScore(Request $request): JsonResponse
+    {
+        $validated = $request->validate([
+            'resume' => ['required', 'file', 'mimes:pdf', 'mimetypes:application/pdf', 'max:10240'],
+            'job_description' => ['required', 'string', 'max:12000', 'regex:/\S/'],
+        ]);
+        $candidateId = (string) $request->user()->getAuthIdentifier();
+        $resume = $request->file('resume');
+        $jobDescription = trim($validated['job_description']);
+
+        if ($resume === null) {
+            return response()->json(['message' => 'A PDF resume is required.'], 422);
+        }
+
+        $requestPayload = [
+            'candidate_id' => $candidateId,
+            'resume_filename' => $resume->getClientOriginalName(),
+            'job_description' => $jobDescription,
+        ];
+        $storedPath = $resume->store('cia/ats-resumes', 'local');
+
+        if (! is_string($storedPath)) {
+            $failure = ['message' => 'The resume could not be stored for analysis.'];
+            $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+
+            return response()->json($failure + ['log_id' => $logId], 500);
+        }
+
+        try {
+            $process = new Process([
+                (string) env('CIA_PYTHON_BINARY', 'python'),
+                base_path('scripts/ats_scorer.py'),
+                Storage::disk('local')->path($storedPath),
+                $jobDescription,
+            ], base_path());
+            $process->setEnv([
+                'GROQ_API_KEY' => (string) env('GROQ_API_KEY', ''),
+                'GROQ_MODEL' => (string) env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            ]);
+            $process->setTimeout(240);
+
+            try {
+                $process->run();
+            } catch (ProcessStartFailedException $exception) {
+                $failure = ['message' => 'Resume scoring service could not be started.'];
+                $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+                Log::error('CIA ATS scoring process could not be started.', [
+                    'candidate_id' => $candidateId,
+                    'log_id' => $logId,
+                    'exception' => $exception->getMessage(),
+                ]);
+
+                return response()->json($failure + ['log_id' => $logId], 502);
+            } catch (ProcessTimedOutException $exception) {
+                $failure = ['message' => 'Resume scoring timed out. Please try again.'];
+                $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+                Log::warning('CIA ATS scoring process timed out.', [
+                    'candidate_id' => $candidateId,
+                    'log_id' => $logId,
+                ]);
+
+                return response()->json($failure + ['log_id' => $logId], 504);
+            }
+
+            if (! $process->isSuccessful()) {
+                $failure = ['message' => 'Resume scoring could not be completed.'];
+                $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+                Log::error('CIA ATS scoring process failed.', [
+                    'candidate_id' => $candidateId,
+                    'log_id' => $logId,
+                    'exit_code' => $process->getExitCode(),
+                    'stderr' => $process->getErrorOutput(),
+                ]);
+
+                return response()->json($failure + ['log_id' => $logId], 502);
+            }
+
+            try {
+                $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+            } catch (\JsonException $exception) {
+                $failure = ['message' => 'Resume scoring returned an invalid response.'];
+                $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+                Log::error('CIA ATS scoring returned invalid JSON.', [
+                    'candidate_id' => $candidateId,
+                    'log_id' => $logId,
+                    'exception' => $exception->getMessage(),
+                ]);
+
+                return response()->json($failure + ['log_id' => $logId], 502);
+            }
+
+            if (! $this->isValidAtsResult($result)) {
+                $failure = ['message' => 'Resume scoring returned an invalid response.'];
+                $logId = $this->logAtsScore($candidateId, $requestPayload, $failure);
+                Log::error('CIA ATS scoring returned an invalid response shape.', [
+                    'candidate_id' => $candidateId,
+                    'log_id' => $logId,
+                ]);
+
+                return response()->json($failure + ['log_id' => $logId], 502);
+            }
+
+            $logId = $this->logAtsScore($candidateId, $requestPayload, $result);
+
+            return response()->json(['log_id' => $logId] + $result);
+        } finally {
+            if (! Storage::disk('local')->delete($storedPath)) {
+                Log::warning('CIA ATS temporary resume could not be deleted.', [
+                    'candidate_id' => $candidateId,
+                ]);
+            }
+        }
     }
 
     public function careerRecommendations(Request $request): JsonResponse
@@ -476,6 +591,67 @@ class CiaController extends \Illuminate\Routing\Controller
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $requestPayload
+     * @param  array<string, mixed>  $results
+     */
+    private function logAtsScore(string $candidateId, array $requestPayload, array $results): int
+    {
+        return DB::table('cia_search_logs')->insertGetId([
+            'candidate_id' => $candidateId,
+            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+            'results' => json_encode($results, JSON_THROW_ON_ERROR),
+            'created_at' => now(),
+            'updated_at' => now(),
+        ]);
+    }
+
+    private function isValidAtsResult(mixed $result): bool
+    {
+        if (! is_array($result) || ! is_int($result['total_score'] ?? null)) {
+            return false;
+        }
+
+        if ($result['total_score'] < 0 || $result['total_score'] > 100) {
+            return false;
+        }
+
+        foreach (['keywords', 'formatting', 'experience', 'skills'] as $category) {
+            if (
+                ! is_int($result[$category] ?? null)
+                || $result[$category] < 0
+                || $result[$category] > 100
+            ) {
+                return false;
+            }
+        }
+
+        if (! $this->isStringList($result['keyword_gaps'] ?? null)) {
+            return false;
+        }
+
+        $suggestions = $result['rewrite_suggestions'] ?? null;
+        if (! is_array($suggestions) || ! array_is_list($suggestions)) {
+            return false;
+        }
+
+        foreach ($suggestions as $suggestion) {
+            if (
+                ! is_array($suggestion)
+                || ! is_string($suggestion['section'] ?? null)
+                || trim($suggestion['section']) === ''
+                || ! is_string($suggestion['current_issue'] ?? null)
+                || trim($suggestion['current_issue']) === ''
+                || ! is_string($suggestion['suggestion'] ?? null)
+                || trim($suggestion['suggestion']) === ''
+            ) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /**

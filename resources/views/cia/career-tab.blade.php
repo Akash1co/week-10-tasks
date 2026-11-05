@@ -1,3 +1,86 @@
+<section class="cia-readiness" aria-labelledby="cia-readiness-title">
+    <header class="cia-readiness-header">
+        <div>
+            <h2 id="cia-readiness-title">Student score card</h2>
+            <p>Track placement and interview readiness across your key milestones.</p>
+        </div>
+        <button id="cia-readiness-edit" type="button">Update scores</button>
+    </header>
+    <p id="cia-readiness-status" role="status" aria-live="polite">Loading your readiness scores...</p>
+    <div class="cia-readiness-cards">
+        <article class="cia-readiness-card" aria-labelledby="cia-placement-title">
+            <h3 id="cia-placement-title">Placement Readiness</h3>
+            <div class="cia-readiness-summary">
+                <div id="cia-placement-score-ring" class="cia-readiness-ring">
+                    <span id="cia-placement-score">0%</span>
+                </div>
+                <span>Placement Readiness Score (%)</span>
+            </div>
+            <div id="cia-placement-breakdown" class="cia-readiness-breakdown"></div>
+        </article>
+        <article class="cia-readiness-card" aria-labelledby="cia-interview-title">
+            <h3 id="cia-interview-title">Interview Readiness</h3>
+            <div class="cia-readiness-summary">
+                <div id="cia-interview-score-ring" class="cia-readiness-ring">
+                    <span id="cia-interview-score">0%</span>
+                </div>
+                <span>Interview Readiness Score (%)</span>
+            </div>
+            <div id="cia-interview-breakdown" class="cia-readiness-breakdown"></div>
+        </article>
+    </div>
+
+    <dialog id="cia-readiness-dialog" class="cia-readiness-dialog" aria-labelledby="cia-readiness-dialog-title">
+        <form id="cia-readiness-form">
+            @csrf
+            <header>
+                <div>
+                    <h3 id="cia-readiness-dialog-title">Update readiness metrics</h3>
+                    <p>Enter scores from 0 to 100. Weighted totals are calculated automatically.</p>
+                </div>
+                <button id="cia-readiness-close" type="button" aria-label="Close score editor">×</button>
+            </header>
+
+            <fieldset>
+                <legend>Placement readiness</legend>
+                <label>Project completion
+                    <input name="project_completion_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>Assessment scores
+                    <input name="assessment_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>CIA usage
+                    <input name="cia_usage_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>Documentation
+                    <input name="docs_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+            </fieldset>
+
+            <fieldset>
+                <legend>Interview readiness</legend>
+                <label>Viva scores
+                    <input name="viva_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>Code review
+                    <input name="code_review_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>Demo clarity
+                    <input name="demo_clarity_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+                <label>Git quality
+                    <input name="git_quality_score" type="number" min="0" max="100" step="0.01" value="0" required>
+                </label>
+            </fieldset>
+
+            <div class="cia-readiness-actions">
+                <button type="submit">Calculate and save</button>
+                <button id="cia-readiness-cancel" type="button">Cancel</button>
+            </div>
+        </form>
+    </dialog>
+</section>
+
 <section class="cia-skill-gap" aria-labelledby="cia-skill-gap-title">
     <h2 id="cia-skill-gap-title">Skill gap analysis</h2>
 
@@ -98,6 +181,146 @@
 </section>
 
 <style>
+    .cia-readiness {
+        margin-block: 2rem;
+    }
+
+    .cia-readiness-header,
+    .cia-readiness-dialog header {
+        align-items: center;
+        display: flex;
+        gap: 1rem;
+        justify-content: space-between;
+    }
+
+    .cia-readiness-cards {
+        display: grid;
+        gap: 1rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+    }
+
+    .cia-readiness-card {
+        border: 1px solid #d1d5db;
+        border-radius: 0.75rem;
+        padding: 1.25rem;
+    }
+
+    .cia-readiness-summary {
+        align-items: center;
+        display: flex;
+        gap: 1rem;
+        margin-block: 1rem;
+    }
+
+    .cia-readiness-ring {
+        align-items: center;
+        background: conic-gradient(
+            var(--cia-readiness-color, #2563eb) 0% var(--cia-readiness-score, 0%),
+            #e5e7eb var(--cia-readiness-score, 0%) 100%
+        );
+        border-radius: 50%;
+        display: flex;
+        flex: 0 0 6rem;
+        height: 6rem;
+        justify-content: center;
+        position: relative;
+        width: 6rem;
+    }
+
+    .cia-readiness-ring::before {
+        background: white;
+        border-radius: 50%;
+        content: "";
+        inset: 0.4rem;
+        position: absolute;
+    }
+
+    .cia-readiness-ring span {
+        font-size: 1.15rem;
+        font-weight: 700;
+        position: relative;
+    }
+
+    .cia-readiness-breakdown {
+        display: grid;
+        gap: 0.75rem;
+    }
+
+    .cia-readiness-metric {
+        display: grid;
+        gap: 0.35rem;
+        grid-template-columns: 1fr auto;
+    }
+
+    .cia-readiness-metric progress {
+        grid-column: 1 / -1;
+        height: 0.65rem;
+        width: 100%;
+    }
+
+    .cia-readiness-metric .is-high {
+        accent-color: #15803d;
+    }
+
+    .cia-readiness-metric .is-medium {
+        accent-color: #ca8a04;
+    }
+
+    .cia-readiness-metric .is-low {
+        accent-color: #dc2626;
+    }
+
+    .cia-readiness-dialog {
+        border: 0;
+        border-radius: 0.75rem;
+        max-height: 90vh;
+        max-width: 40rem;
+        padding: 1.5rem;
+        width: calc(100% - 2rem);
+    }
+
+    .cia-readiness-dialog::backdrop {
+        background: rgb(15 23 42 / 55%);
+    }
+
+    .cia-readiness-dialog form {
+        display: grid;
+        gap: 1rem;
+    }
+
+    .cia-readiness-dialog fieldset {
+        border: 1px solid #d1d5db;
+        border-radius: 0.5rem;
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+        padding: 1rem;
+    }
+
+    .cia-readiness-dialog label {
+        display: grid;
+        gap: 0.35rem;
+    }
+
+    .cia-readiness-dialog input {
+        min-width: 0;
+        padding: 0.55rem;
+        width: 100%;
+    }
+
+    .cia-readiness-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+    }
+
+    @media (max-width: 30rem) {
+        .cia-readiness-header {
+            align-items: flex-start;
+            flex-direction: column;
+        }
+    }
+
     .cia-career-recommendations {
         margin-block: 2rem;
     }
@@ -215,6 +438,122 @@
         justify-content: space-between;
     }
 </style>
+
+<script>
+    (() => {
+        const form = document.getElementById('cia-readiness-form');
+        const dialog = document.getElementById('cia-readiness-dialog');
+        const status = document.getElementById('cia-readiness-status');
+        const fields = [
+            ['project_completion_score', 'Project completion'],
+            ['assessment_score', 'Assessment scores'],
+            ['cia_usage_score', 'CIA usage'],
+            ['docs_score', 'Documentation'],
+            ['viva_score', 'Viva scores'],
+            ['code_review_score', 'Code review'],
+            ['demo_clarity_score', 'Demo clarity'],
+            ['git_quality_score', 'Git quality'],
+        ];
+        const groups = [
+            {
+                prefix: 'placement',
+                total: 'placement_readiness_score',
+                metrics: fields.slice(0, 4),
+            },
+            {
+                prefix: 'interview',
+                total: 'interview_readiness_score',
+                metrics: fields.slice(4),
+            },
+        ];
+        let currentScores = {};
+
+        const scoreValue = (value) => {
+            const score = Number(value);
+            return Number.isFinite(score) ? Math.min(100, Math.max(0, score)) : 0;
+        };
+
+        const renderScores = (scores) => {
+            currentScores = scores || {};
+            groups.forEach((group) => {
+                const total = scoreValue(currentScores[group.total]);
+                const ring = document.getElementById(`cia-${group.prefix}-score-ring`);
+                ring.style.setProperty('--cia-readiness-score', `${total}%`);
+                document.getElementById(`cia-${group.prefix}-score`).textContent = `${total.toFixed(2).replace(/\.00$/, '')}%`;
+
+                const breakdown = document.getElementById(`cia-${group.prefix}-breakdown`);
+                breakdown.replaceChildren();
+                group.metrics.forEach(([key, label]) => {
+                    const value = scoreValue(currentScores[key]);
+                    const row = document.createElement('div');
+                    row.className = 'cia-readiness-metric';
+                    const name = document.createElement('span');
+                    name.textContent = label;
+                    const amount = document.createElement('span');
+                    amount.textContent = `${value.toFixed(2).replace(/\.00$/, '')}%`;
+                    const progress = document.createElement('progress');
+                    progress.max = 100;
+                    progress.value = value;
+                    progress.className = value >= 80 ? 'is-high' : value >= 50 ? 'is-medium' : 'is-low';
+                    progress.setAttribute('aria-label', `${label}: ${value} out of 100`);
+                    row.append(name, amount, progress);
+                    breakdown.appendChild(row);
+                });
+            });
+        };
+
+        document.getElementById('cia-readiness-edit').addEventListener('click', () => {
+            fields.forEach(([key]) => {
+                form.elements[key].value = currentScores[key] ?? 0;
+            });
+            dialog.showModal();
+        });
+        document.getElementById('cia-readiness-close').addEventListener('click', () => dialog.close());
+        document.getElementById('cia-readiness-cancel').addEventListener('click', () => dialog.close());
+
+        fetch('/candidate/cia/career/readiness-scores', {
+            headers: { 'Accept': 'application/json' },
+        })
+            .then(async (response) => {
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Readiness scores could not be loaded.');
+                }
+                renderScores(result.scores);
+                status.textContent = result.scores ? 'Your latest readiness scores.' : 'No scores yet. Enter your metrics to calculate your readiness.';
+            })
+            .catch((error) => {
+                status.textContent = error.message || 'Readiness scores could not be loaded.';
+            });
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            status.textContent = 'Calculating and saving your readiness scores...';
+            const metrics = Object.fromEntries(fields.map(([key]) => [key, Number(form.elements[key].value)]));
+
+            try {
+                const response = await fetch('/candidate/cia/career/calculate-scores', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
+                    },
+                    body: JSON.stringify(metrics),
+                });
+                const result = await response.json();
+                if (!response.ok) {
+                    throw new Error(result.message || 'Readiness scores could not be calculated.');
+                }
+                renderScores(result.scores);
+                status.textContent = result.message;
+                dialog.close();
+            } catch (error) {
+                status.textContent = error.message || 'Readiness scores could not be calculated.';
+            }
+        });
+    })();
+</script>
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>

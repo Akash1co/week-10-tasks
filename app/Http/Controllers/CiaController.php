@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Models\LessonUser;
+use App\Models\PlacementReadinessScore;
 use App\Models\QuizAttempt;
+use App\Services\ReadinessScoreService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -17,6 +19,19 @@ use Symfony\Component\Process\Process;
 
 class CiaController extends \Illuminate\Routing\Controller
 {
+    private const READINESS_SCORE_FIELDS = [
+        'project_completion_score',
+        'assessment_score',
+        'cia_usage_score',
+        'docs_score',
+        'placement_readiness_score',
+        'viva_score',
+        'code_review_score',
+        'demo_clarity_score',
+        'git_quality_score',
+        'interview_readiness_score',
+    ];
+
     private const RADAR_LABELS = [
         'Backend PHP',
         'Laravel',
@@ -33,6 +48,41 @@ class CiaController extends \Illuminate\Routing\Controller
         'data scientist' => [65, 60, 95, 80, 70],
         'devops engineer' => [85, 80, 70, 85, 95],
     ];
+
+    public function readinessScores(Request $request): JsonResponse
+    {
+        $scores = PlacementReadinessScore::query()
+            ->where('user_id', $request->user()->getAuthIdentifier())
+            ->first();
+
+        return response()->json([
+            'scores' => $scores?->only(self::READINESS_SCORE_FIELDS),
+        ]);
+    }
+
+    public function calculateReadinessScores(Request $request, ReadinessScoreService $scoreService): JsonResponse
+    {
+        $validated = $request->validate([
+            'project_completion_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'assessment_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'cia_usage_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'docs_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'viva_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'code_review_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'demo_clarity_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+            'git_quality_score' => ['sometimes', 'numeric', 'min:0', 'max:100'],
+        ]);
+
+        $score = $scoreService->calculateAndSave(
+            (int) $request->user()->getAuthIdentifier(),
+            $validated
+        );
+
+        return response()->json([
+            'message' => 'Readiness scores calculated successfully.',
+            'scores' => $score->only(self::READINESS_SCORE_FIELDS),
+        ]);
+    }
 
     public function skillGap(Request $request): JsonResponse
     {

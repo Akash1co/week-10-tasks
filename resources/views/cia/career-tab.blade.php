@@ -23,6 +23,28 @@
     </div>
 </section>
 
+<section class="cia-resume-intelligence" aria-labelledby="cia-resume-intelligence-title">
+    <h2 id="cia-resume-intelligence-title">Resume intelligence</h2>
+    <form id="cia-ats-score-form" enctype="multipart/form-data">
+        @csrf
+        <label for="cia-ats-resume">Resume (PDF, max 10 MB)</label>
+        <input id="cia-ats-resume" name="resume" type="file" accept=".pdf,application/pdf" required>
+
+        <label for="cia-ats-job-description">Target job description</label>
+        <textarea
+            id="cia-ats-job-description"
+            name="job_description"
+            rows="8"
+            maxlength="12000"
+            required
+        ></textarea>
+
+        <button type="submit">Score resume</button>
+    </form>
+    <p id="cia-ats-score-status" role="status" aria-live="polite"></p>
+    <div id="cia-ats-score-results" class="cia-ats-score-results" aria-live="polite"></div>
+</section>
+
 <section class="cia-career-recommendations" aria-labelledby="cia-career-recommendations-title">
     <h2 id="cia-career-recommendations-title">Career recommendations</h2>
     <form id="cia-career-recommendations-form">
@@ -98,6 +120,65 @@
 </section>
 
 <style>
+    .cia-resume-intelligence {
+        margin-block: 2rem;
+    }
+
+    .cia-resume-intelligence form {
+        display: grid;
+        gap: 0.75rem;
+        max-width: 42rem;
+    }
+
+    .cia-resume-intelligence input,
+    .cia-resume-intelligence textarea {
+        padding: 0.6rem;
+    }
+
+    .cia-resume-intelligence button {
+        justify-self: start;
+        padding: 0.65rem 1rem;
+    }
+
+    .cia-ats-score-card {
+        border: 1px solid #d1d5db;
+        border-radius: 0.5rem;
+        margin-top: 1rem;
+        max-width: 48rem;
+        padding: 1rem;
+    }
+
+    .cia-ats-total-score {
+        display: inline-block;
+        border-radius: 9999px;
+        background: #e0f2fe;
+        font-size: 1.25rem;
+        font-weight: 700;
+        padding: 0.4rem 0.8rem;
+    }
+
+    .cia-ats-category {
+        display: grid;
+        gap: 0.5rem;
+        grid-template-columns: minmax(7rem, 1fr) 3fr 3rem;
+        align-items: center;
+        margin-block: 0.5rem;
+    }
+
+    .cia-ats-category progress {
+        width: 100%;
+    }
+
+    .cia-ats-suggestion {
+        border-top: 1px solid #e5e7eb;
+        padding-block: 0.75rem;
+    }
+
+    .cia-ats-suggestion summary {
+        cursor: pointer;
+        font-weight: 600;
+    }
+
     .cia-career-recommendations {
         margin-block: 2rem;
     }
@@ -299,6 +380,96 @@
                 status.textContent = 'Analysis complete.';
             } catch (error) {
                 status.textContent = error.message;
+            }
+        });
+    })();
+</script>
+<script>
+    (() => {
+        const form = document.getElementById('cia-ats-score-form');
+        const status = document.getElementById('cia-ats-score-status');
+        const results = document.getElementById('cia-ats-score-results');
+        const categories = [
+            ['keywords', 'Keywords'],
+            ['formatting', 'Formatting'],
+            ['experience', 'Experience'],
+            ['skills', 'Skills'],
+        ];
+
+        const appendText = (parent, tag, text) => {
+            const element = document.createElement(tag);
+            element.textContent = text;
+            parent.appendChild(element);
+            return element;
+        };
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            status.textContent = 'Extracting and scoring your resume...';
+            results.replaceChildren();
+
+            try {
+                const response = await fetch('/candidate/cia/career/ats-score', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
+                    },
+                    body: new FormData(form),
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.message || 'Resume scoring failed.');
+                }
+
+                const card = document.createElement('article');
+                card.className = 'cia-ats-score-card';
+                appendText(card, 'h3', 'ATS match score');
+                const totalScore = appendText(card, 'p', `${result.total_score}/100`);
+                totalScore.className = 'cia-ats-total-score';
+
+                appendText(card, 'h4', 'Category scores');
+                categories.forEach(([key, label]) => {
+                    const row = document.createElement('div');
+                    row.className = 'cia-ats-category';
+                    appendText(row, 'span', label);
+                    const progress = document.createElement('progress');
+                    progress.max = 100;
+                    progress.value = result[key];
+                    progress.setAttribute('aria-label', `${label}: ${result[key]} out of 100`);
+                    row.appendChild(progress);
+                    appendText(row, 'span', `${result[key]}/100`);
+                    card.appendChild(row);
+                });
+
+                appendText(card, 'h4', 'Keyword gaps');
+                const keywordGaps = document.createElement('ul');
+                if (result.keyword_gaps.length === 0) {
+                    appendText(keywordGaps, 'li', 'No major keyword gaps identified.');
+                } else {
+                    result.keyword_gaps.forEach((gap) => appendText(keywordGaps, 'li', gap));
+                }
+                card.appendChild(keywordGaps);
+
+                appendText(card, 'h4', 'Rewrite suggestions');
+                if (result.rewrite_suggestions.length === 0) {
+                    appendText(card, 'p', 'No section-specific rewrite suggestions.');
+                } else {
+                    result.rewrite_suggestions.forEach((suggestion) => {
+                        const item = document.createElement('details');
+                        item.className = 'cia-ats-suggestion';
+                        appendText(item, 'summary', suggestion.section);
+                        appendText(item, 'p', `Opportunity: ${suggestion.current_issue}`);
+                        appendText(item, 'p', `Suggested rewrite: ${suggestion.suggestion}`);
+                        card.appendChild(item);
+                    });
+                }
+
+                results.appendChild(card);
+                status.textContent = 'Resume analysis complete.';
+            } catch (error) {
+                status.textContent = error.message || 'Resume scoring failed.';
             }
         });
     })();

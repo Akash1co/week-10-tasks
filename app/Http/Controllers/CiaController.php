@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\LessonUser;
 use App\Models\QuizAttempt;
+use App\Services\InternshipMatchingService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -34,6 +35,35 @@ class CiaController extends \Illuminate\Routing\Controller
         'data scientist' => [65, 60, 95, 80, 70],
         'devops engineer' => [85, 80, 70, 85, 95],
     ];
+
+    public function matchInternships(Request $request, InternshipMatchingService $matchingService): JsonResponse
+    {
+        $validated = $request->validate([
+            'skills' => ['sometimes', 'array', 'min:1', 'max:50'],
+            'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
+        ]);
+        $userId = (int) $request->user()->getAuthIdentifier();
+
+        try {
+            $matches = $matchingService->matchInternships($userId, $validated['skills'] ?? null);
+        } catch (\RuntimeException $exception) {
+            $timedOut = $exception->getPrevious() instanceof ProcessTimedOutException;
+            Log::error('CIA internship matching failed.', [
+                'user_id' => $userId,
+                'exception' => $exception->getMessage(),
+                'previous_exception' => $exception->getPrevious()?->getMessage(),
+            ]);
+
+            return response()->json([
+                'status' => 'error',
+                'message' => $exception->getMessage(),
+            ], $timedOut ? 504 : 502);
+        }
+
+        return response()->json([
+            'message' => 'Top internship matches generated successfully.',
+        ] + $matches);
+    }
 
     public function skillGap(Request $request): JsonResponse
     {

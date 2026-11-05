@@ -1,0 +1,122 @@
+[
+  {
+    "id": "role_01",
+    "role": "Full Stack Developer",
+    "required_skills": ["JavaScript", "React", "PHP", "Laravel", "SQL", "REST APIs", "Git"],
+    "match_criteria": "Ideal candidates have built complete web features across responsive browser interfaces and server-side applications. They can explain how client state, API contracts, authentication, and relational data fit together, and have shipped project work using source control."
+  },
+  {
+    "id": "role_02",
+    "role": "Frontend Engineer",
+    "required_skills": ["HTML", "CSS", "JavaScript", "TypeScript", "React", "Accessibility"],
+    "match_criteria": "Ideal candidates create polished, responsive, accessible interfaces and understand component architecture, browser behavior, and performance. They have practical experience translating design requirements into tested frontend features."
+  },
+  {
+    "id": "role_03",
+    "role": "Backend Developer",
+    "required_skills": ["PHP", "Laravel", "SQL", "REST APIs", "Authentication", "Git"],
+    "match_criteria": "Ideal candidates design maintainable server-side applications, model relational data, and implement secure, well-documented APIs. They can debug application behavior and demonstrate backend work through coursework, projects, or internships."
+  },
+  {
+    "id": "role_04",
+    "role": "AI/ML Integration Engineer",
+    "required_skills": ["Python", "Machine Learning", "LLM APIs", "Prompt Engineering", "Vector Databases", "REST APIs"],
+    "match_criteria": "Ideal candidates integrate machine-learning models or language-model APIs into useful applications. They understand data preparation, prompt and retrieval evaluation, API integration, and the limitations of model-generated results."
+  },
+  {
+    "id": "role_05",
+    "role": "DevOps Engineer",
+    "required_skills": ["Linux", "Docker", "CI/CD", "Cloud Platforms", "Git", "Monitoring"],
+    "match_criteria": "Ideal candidates automate repeatable builds and deployments, understand Linux-based services and containers, and can investigate operational failures. They have used a cloud platform and can describe reliability, monitoring, and delivery practices."
+  },
+  {
+    "id": "role_06",
+    "role": "QA Automation Engineer",
+    "required_skills": ["Python", "Software Testing", "Selenium", "API Testing", "CI/CD", "Git"],
+    "match_criteria": "Ideal candidates turn acceptance criteria into reliable automated checks for web applications and APIs. They understand test design, failure diagnosis, regression coverage, and how to integrate test suites into a delivery pipeline."
+  },
+  {
+    "id": "role_07",
+    "role": "Data Engineer",
+    "required_skills": ["Python", "SQL", "ETL", "Data Modeling", "Data Warehousing", "Cloud Platforms"],
+    "match_criteria": "Ideal candidates write dependable data transformations and SQL, understand data quality and schema design, and can explain how information moves from source systems into analytics-ready storage. Practical pipeline or warehouse projects are valued."
+  },
+  {
+    "id": "role_08",
+    "role": "Mobile App Developer",
+    "required_skills": ["Kotlin", "Android", "Mobile UI", "REST APIs", "Git", "Software Testing"],
+    "match_criteria": "Ideal candidates build and test Android applications with clear mobile interaction patterns. They can connect a mobile client to backend APIs, manage application state, and demonstrate a working app or equivalent mobile development project."
+  },
+  {
+    "id": "role_09",
+    "role": "Cloud Solutions Architect",
+    "required_skills": ["Cloud Architecture", "AWS", "Networking", "Security", "Infrastructure as Code", "Linux"],
+    "match_criteria": "Ideal candidates can map application requirements to secure, resilient cloud components and explain networking, identity, scaling, and cost trade-offs. They have hands-on cloud or infrastructure-as-code experience and communicate architecture clearly."
+  },
+  {
+    "id": "role_10",
+    "role": "Security Analyst",
+    "required_skills": ["Network Security", "Linux", "Incident Response", "Vulnerability Assessment", "SIEM", "Python"],
+    "match_criteria": "Ideal candidates use defensive security practices to assess alerts, document risks, and support incident response. They understand networks and operating systems, can interpret security evidence carefully, and communicate findings responsibly."
+  },
+  {
+    "id": "role_11",
+    "role": "UI/UX Developer",
+    "required_skills": ["Figma", "HTML", "CSS", "JavaScript", "Accessibility", "Responsive Design"],
+    "match_criteria": "Ideal candidates bridge design and implementation by translating user flows and prototypes into responsive, accessible interfaces. They understand usability fundamentals, collaborate with designers, and validate their work across screen sizes."
+  },
+  {
+    "id": "role_12",
+    "role": "Database Administrator",
+    "required_skills": ["SQL", "PostgreSQL", "Database Administration", "Backup and Recovery", "Performance Tuning", "Linux"],
+    "match_criteria": "Ideal candidates understand relational database operations, permissions, backup and recovery, and query performance. They can write and inspect SQL, investigate data issues, and follow careful change and recovery procedures."
+  },
+  {
+    "id": "role_13",
+    "role": "API Engineer",
+    "required_skills": ["REST APIs", "OpenAPI", "Authentication", "PHP", "Laravel", "SQL"],
+    "match_criteria": "Ideal candidates implement predictable, secure API contracts and understand validation, status codes, authentication, and relational persistence. They can document endpoints and test successful as well as invalid request behavior."
+  },
+  {
+    "id": "role_14",
+    "role": "System Administrator",
+    "required_skills": ["Linux", "Networking", "Shell Scripting", "System Monitoring", "Security", "Backup and Recovery"],
+    "match_criteria": "Ideal candidates maintain dependable Linux or server environments, automate routine administration, and troubleshoot connectivity and resource issues. They follow secure access, monitoring, and backup practices."
+  },
+  {
+    "id": "role_15",
+    "role": "Moodle Developer",
+    "required_skills": ["PHP", "Moodle", "MySQL", "JavaScript", "HTML", "Git"],
+    "match_criteria": "Ideal candidates customize or extend Moodle-based learning platforms using PHP and web technologies. They understand plugin or theme development, relational data, version control, and the needs of educators and learners."
+  },
+  {
+    "id": "role_16",
+    "role": "Python Developer",
+    "required_skills": ["Python", "Object-Oriented Programming", "REST APIs", "SQL", "Pytest", "Git"],
+    "match_criteria": "Ideal candidates write readable, tested Python applications and understand modular design, data access, and API integration. They use version control and can demonstrate practical scripts, services, or automation projects."
+  },
+  {
+    "id": "role_17",
+    "role": "PHP/Laravel Developer",
+    "required_skills": ["PHP", "Laravel", "Eloquent ORM", "SQL", "REST APIs", "PHPUnit"],
+    "match_criteria": "Ideal candidates build maintainable Laravel applications using framework conventions, Eloquent, validation, and automated tests. They can implement application features end to end and explain how their code handles persistence and errors."
+  },
+  {
+    "id": "role_18",
+    "role": "React Developer",
+    "required_skills": ["React", "JavaScript", "TypeScript", "HTML", "CSS", "REST APIs"],
+    "match_criteria": "Ideal candidates build reusable React interfaces and understand component state, props, hooks, and API-driven data. They care about accessibility and responsive behavior and can show a deployed or documented React project."
+  },
+  {
+    "id": "role_19",
+    "role": "Technical Support Engineer",
+    "required_skills": ["Troubleshooting", "Linux", "SQL", "Networking", "Customer Communication", "Python"],
+    "match_criteria": "Ideal candidates methodically reproduce and diagnose technical issues, interpret logs and data, and communicate clear resolutions to users and engineering teams. They have practical command-line and basic scripting skills."
+  },
+  {
+    "id": "role_20",
+    "role": "Software Engineering Intern",
+    "required_skills": ["Programming Fundamentals", "Git", "Data Structures", "Software Testing", "Problem Solving", "Communication"],
+    "match_criteria": "Ideal candidates are early-career learners with sound programming fundamentals, curiosity, and evidence of building software through coursework or personal projects. They can collaborate, accept feedback, use version control, and explain their problem-solving approach."
+  }
+]

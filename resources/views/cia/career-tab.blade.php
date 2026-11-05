@@ -101,19 +101,19 @@
     <div id="cia-learning-path-results" class="cia-learning-path-weeks"></div>
 </section>
 
-<section class="cia-role-matching" aria-labelledby="cia-role-matching-title">
-    <h2 id="cia-role-matching-title">Internship &amp; role matching</h2>
+<section class="cia-role-matching cia-vector-internship-matcher" aria-labelledby="cia-role-matching-title">
+    <h2 id="cia-role-matching-title">Vector Internship Matcher</h2>
+    <p>Find internships ranked against your completed learning and assessment history, or enter skills to personalize your results.</p>
     <form id="cia-role-matching-form">
         @csrf
-        <label for="cia-role-matching-skills">Your skills (comma separated)</label>
+        <label for="cia-role-matching-skills">Your skills (optional, comma separated)</label>
         <input
             id="cia-role-matching-skills"
             name="skills"
             type="text"
             maxlength="1000"
-            required
         >
-        <button type="submit">Find matching roles</button>
+        <button type="submit">Find Top 5 Matching Internships</button>
     </form>
     <p id="cia-role-matching-status" role="status" aria-live="polite"></p>
     <div id="cia-role-matching-results" class="cia-role-matches"></div>
@@ -294,6 +294,57 @@
     .cia-role-match header {
         display: flex;
         justify-content: space-between;
+    }
+
+    .cia-role-match-badges,
+    .cia-role-match-skills {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+        margin-block: 0.5rem 1rem;
+    }
+
+    .cia-role-match-rank,
+    .cia-role-match-percentage,
+    .cia-role-match-skill {
+        border-radius: 999px;
+        display: inline-flex;
+        font-size: 0.875rem;
+        padding: 0.25rem 0.65rem;
+    }
+
+    .cia-role-match-rank {
+        background: #e5e7eb;
+        font-weight: 700;
+    }
+
+    .cia-role-match-percentage {
+        font-weight: 700;
+    }
+
+    .cia-role-match-percentage--high {
+        background: #dcfce7;
+        color: #166534;
+    }
+
+    .cia-role-match-percentage--medium {
+        background: #dbeafe;
+        color: #1d4ed8;
+    }
+
+    .cia-role-match-percentage--low {
+        background: #fef3c7;
+        color: #92400e;
+    }
+
+    .cia-role-match-skill {
+        background: #f3f4f6;
+        color: #374151;
+    }
+
+    .cia-role-match-skill--missing {
+        background: #fee2e2;
+        color: #9a3412;
     }
 </style>
 
@@ -582,9 +633,18 @@
             return element;
         };
 
+        const appendSkillTags = (parent, skills, missing = false) => {
+            skills.forEach((skill) => {
+                const tag = appendText(parent, 'span', skill);
+                tag.className = missing
+                    ? 'cia-role-match-skill cia-role-match-skill--missing'
+                    : 'cia-role-match-skill';
+            });
+        };
+
         form.addEventListener('submit', async (event) => {
             event.preventDefault();
-            status.textContent = 'Matching your skills to internship and career roles...';
+            status.textContent = 'Matching your profile to internship roles...';
             results.replaceChildren();
 
             const skills = form.elements.skills.value
@@ -593,51 +653,61 @@
                 .filter(Boolean);
 
             try {
-                const response = await fetch('/candidate/cia/career/vector-search', {
+                const response = await fetch('/candidate/cia/career/match-internships', {
                     method: 'POST',
                     headers: {
                         'Accept': 'application/json',
                         'Content-Type': 'application/json',
                         'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
                     },
-                    body: JSON.stringify({ skills }),
+                    body: JSON.stringify(skills.length ? { skills } : {}),
                 });
                 const result = await response.json();
 
                 if (!response.ok) {
-                    throw new Error(result.message || 'Role matching could not be completed.');
+                    throw new Error(result.message || 'Internship matching could not be completed.');
                 }
 
                 result.matches.forEach((match, index) => {
                     const card = document.createElement('article');
                     card.className = 'cia-role-match';
-                    const header = document.createElement('header');
-                    appendText(header, 'span', `Rank #${index + 1}`);
-                    appendText(header, 'strong', `${match.match_percentage}% match`);
-                    card.appendChild(header);
+                    const badges = document.createElement('div');
+                    badges.className = 'cia-role-match-badges';
+                    const rank = appendText(badges, 'span', `#${index + 1}`);
+                    rank.className = 'cia-role-match-rank';
+                    const percentage = appendText(badges, 'span', `${match.match_percentage}% match`);
+                    percentage.className = 'cia-role-match-percentage ' + (
+                        match.match_percentage >= 80
+                            ? 'cia-role-match-percentage--high'
+                            : match.match_percentage >= 60
+                                ? 'cia-role-match-percentage--medium'
+                                : 'cia-role-match-percentage--low'
+                    );
+                    card.appendChild(badges);
                     appendText(card, 'h3', match.role);
-                    appendText(card, 'p', match.match_criteria);
 
-                    const metadata = Object.entries(match.metadata || {})
-                        .map(([key, value]) => `${key.replaceAll('_', ' ')}: ${value}`)
-                        .join(' · ');
-                    if (metadata) {
-                        appendText(card, 'p', metadata);
-                    }
+                    appendText(card, 'h4', 'Required skills');
+                    const requiredSkills = document.createElement('div');
+                    requiredSkills.className = 'cia-role-match-skills';
+                    appendSkillTags(requiredSkills, match.required_skills);
+                    card.appendChild(requiredSkills);
 
-                    appendText(card, 'h4', 'Missing skills');
-                    const gaps = document.createElement('ul');
+                    appendText(card, 'h4', 'Skill gaps');
+                    const gaps = document.createElement('div');
+                    gaps.className = 'cia-role-match-skills';
                     if (match.missing_skills.length) {
-                        match.missing_skills.forEach((skill) => appendText(gaps, 'li', skill));
+                        appendSkillTags(gaps, match.missing_skills, true);
                     } else {
-                        appendText(gaps, 'li', 'No required skill gaps identified.');
+                        appendText(gaps, 'span', 'No required skill gaps identified.').className = 'cia-role-match-skill';
                     }
                     card.appendChild(gaps);
+                    appendText(card, 'h4', 'Match criteria');
+                    appendText(card, 'p', match.match_criteria);
                     results.appendChild(card);
                 });
-                status.textContent = 'Top role matches are ready.';
+                status.textContent = `${result.total_matched} ranked internship matches are ready. Profile skills: ${result.candidate_skills.join(', ')}.`;
             } catch (error) {
-                status.textContent = error.message;
+                status.textContent = error instanceof Error ? error.message : 'Internship matching could not be completed.';
             }
         });
     })();

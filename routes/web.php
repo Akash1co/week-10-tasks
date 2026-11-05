@@ -19,6 +19,10 @@ Route::post('/candidate/cia/career/vector-search', [CiaController::class, 'vecto
     ->middleware(['auth'])
     ->name('cia.career.vector_search');
 
+Route::post('/candidate/cia/career/match-internships', [CiaController::class, 'matchInternships'])
+    ->middleware(['auth'])
+    ->name('cia.career.match_internships');
+
 Route::prefix('cia/career')
     ->middleware(['auth'])
     ->group(function () {

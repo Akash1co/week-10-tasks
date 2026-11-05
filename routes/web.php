@@ -3,6 +3,27 @@
 use App\Http\Controllers\CiaController;
 use Illuminate\Support\Facades\Route;
 
+Route::get('/candidate/cia/career/readiness-scores', [CiaController::class, 'readinessScores'])
+    ->middleware(['auth'])
+    ->name('cia.career.readiness_scores');
+
+Route::post('/candidate/cia/career/calculate-scores', [CiaController::class, 'calculateReadinessScores'])
+    ->middleware(['auth'])
+    ->name('cia.career.calculate_scores');
+
+Route::post('/candidate/cia/career/generate-report', [CiaController::class, 'generateCareerReport'])
+    ->middleware(['auth'])
+    ->name('cia.career.reports.generate');
+
+Route::get('/candidate/cia/career/reports', [CiaController::class, 'careerReports'])
+    ->middleware(['auth'])
+    ->name('cia.career.reports.index');
+
+Route::get('/candidate/cia/career/reports/{id}/download', [CiaController::class, 'downloadCareerReport'])
+    ->middleware(['auth'])
+    ->whereNumber('id')
+    ->name('cia.career.reports.download');
+
 Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'])
     ->middleware(['auth'])
     ->name('cia.career.skill_gap');

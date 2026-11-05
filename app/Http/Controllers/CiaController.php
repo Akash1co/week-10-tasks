@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\CandidateReport;
 use App\Models\LessonUser;
 use App\Models\PlacementReadinessScore;
 use App\Models\QuizAttempt;
+use App\Services\CareerReportService;
 use App\Services\ReadinessScoreService;
 use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
@@ -12,7 +14,9 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use RuntimeException;
 use Symfony\Component\Process\Exception\ProcessStartFailedException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
@@ -82,6 +86,138 @@ class CiaController extends \Illuminate\Routing\Controller
             'message' => 'Readiness scores calculated successfully.',
             'scores' => $score->only(self::READINESS_SCORE_FIELDS),
         ]);
+    }
+
+    public function generateCareerReport(Request $request, CareerReportService $reportService): JsonResponse
+    {
+        $validated = $request->validate([
+            'target_role' => ['sometimes', 'string', 'max:120', 'regex:/\S/'],
+            'skills' => ['sometimes', 'array', 'max:50'],
+            'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
+            'profile' => ['sometimes', 'array', 'max:50'],
+        ]);
+        $user = $request->user();
+        $userId = (int) $user->getAuthIdentifier();
+
+        $completedLessons = LessonUser::query()
+            ->join('lessons', 'lessons.id', '=', 'lesson_user.lesson_id')
+            ->where('lesson_user.user_id', $userId)
+            ->whereNotNull('lesson_user.completed_at')
+            ->latest('lesson_user.completed_at')
+            ->limit(30)
+            ->get(['lessons.title', 'lessons.module_name']);
+        $quizAttempts = QuizAttempt::query()
+            ->where('user_id', $userId)
+            ->whereNotNull('completed_at')
+            ->whereNotNull('score')
+            ->latest('completed_at')
+            ->limit(100)
+            ->get(['skill', 'score']);
+
+        $profile = [
+            'target_role' => trim($validated['target_role'] ?? ''),
+            'skills' => array_values(array_map('trim', $validated['skills'] ?? [])),
+            'readiness_scores' => PlacementReadinessScore::query()
+                ->where('user_id', $userId)
+                ->first()
+                ?->only(self::READINESS_SCORE_FIELDS),
+            'completed_learning' => $completedLessons
+                ->map(fn ($lesson): string => (string) ($lesson->module_name ?: $lesson->title))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
+            'assessment_scores' => $quizAttempts
+                ->map(fn (QuizAttempt $attempt): array => [
+                    'skill' => (string) $attempt->skill,
+                    'score' => (float) $attempt->score,
+                ])
+                ->values()
+                ->all(),
+            'additional_profile' => $validated['profile'] ?? [],
+        ];
+
+        try {
+            $report = $reportService->generate(
+                $userId,
+                trim((string) $user->getAttribute('name')) ?: 'Candidate',
+                $profile
+            );
+        } catch (RuntimeException $exception) {
+            Log::error('Career intelligence report generation failed.', [
+                'user_id' => $userId,
+                'exception' => $exception->getMessage(),
+                'previous_exception' => $exception->getPrevious()?->getMessage(),
+            ]);
+
+            return response()->json([
+                'message' => $exception->getMessage(),
+            ], str_contains($exception->getMessage(), 'timed out') ? 504 : 502);
+        }
+
+        return response()->json([
+            'message' => 'Career intelligence report generated successfully.',
+            'report' => [
+                'id' => $report->id,
+                'overall_employability_score' => $report->overall_employability_score,
+                'archetype_scores' => $report->archetype_scores,
+                'narrative_summary' => $report->narrative_summary,
+                'recommendations' => $report->recommendations,
+                'download_url' => route('cia.career.reports.download', $report),
+            ],
+        ], 201);
+    }
+
+    public function careerReports(Request $request): JsonResponse
+    {
+        $reports = CandidateReport::query()
+            ->where('user_id', $request->user()->getAuthIdentifier())
+            ->where('report_type', 'career_intelligence')
+            ->latest()
+            ->limit(20)
+            ->get([
+                'id',
+                'overall_employability_score',
+                'archetype_scores',
+                'narrative_summary',
+                'recommendations',
+                'pdf_path',
+                'created_at',
+            ]);
+
+        return response()->json([
+            'reports' => $reports->map(fn (CandidateReport $report): array => [
+                'id' => $report->id,
+                'overall_employability_score' => $report->overall_employability_score,
+                'archetype_scores' => $report->archetype_scores,
+                'narrative_summary' => $report->narrative_summary,
+                'recommendations' => $report->recommendations,
+                'created_at' => $report->created_at?->toIso8601String(),
+                'download_url' => $report->pdf_path
+                    ? route('cia.career.reports.download', $report)
+                    : null,
+            ])->values(),
+        ]);
+    }
+
+    public function downloadCareerReport(Request $request, int $id)
+    {
+        $report = CandidateReport::query()
+            ->where('user_id', $request->user()->getAuthIdentifier())
+            ->where('report_type', 'career_intelligence')
+            ->findOrFail($id);
+
+        abort_unless(
+            is_string($report->pdf_path)
+                && $report->pdf_path !== ''
+                && Storage::disk('public')->exists($report->pdf_path),
+            404
+        );
+
+        return Storage::disk('public')->download(
+            $report->pdf_path,
+            'career-intelligence-report-'.$report->id.'.pdf'
+        );
     }
 
     public function skillGap(Request $request): JsonResponse

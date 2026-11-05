@@ -81,6 +81,32 @@
     </dialog>
 </section>
 
+<section class="cia-career-report" aria-labelledby="cia-career-report-title">
+    <header>
+        <div>
+            <h2 id="cia-career-report-title">Career Intelligence Report</h2>
+            <p>Understand your career strengths and get practical next steps based on your learning and readiness profile.</p>
+        </div>
+    </header>
+    <form id="cia-career-report-form">
+        @csrf
+        <label for="cia-report-target-role">Career goal (optional)</label>
+        <input id="cia-report-target-role" name="target_role" type="text" maxlength="120" placeholder="e.g. Full Stack Developer">
+
+        <label for="cia-report-skills">Skills (comma separated)</label>
+        <input id="cia-report-skills" name="skills" type="text" maxlength="1000" placeholder="e.g. Laravel, SQL, communication">
+
+        <button id="cia-career-report-submit" type="submit">Generate Career Intelligence Report</button>
+    </form>
+    <p id="cia-career-report-status" role="status" aria-live="polite"></p>
+    <div id="cia-career-report-result" class="cia-career-report-result"></div>
+    <section aria-labelledby="cia-career-report-history-title">
+        <h3 id="cia-career-report-history-title">Report history</h3>
+        <p id="cia-career-report-history-status" role="status" aria-live="polite">Loading reports...</p>
+        <div id="cia-career-report-history" class="cia-career-report-history"></div>
+    </section>
+</section>
+
 <section class="cia-skill-gap" aria-labelledby="cia-skill-gap-title">
     <h2 id="cia-skill-gap-title">Skill gap analysis</h2>
 
@@ -183,6 +209,80 @@
 <style>
     .cia-readiness {
         margin-block: 2rem;
+    }
+
+    .cia-career-report {
+        border: 1px solid #d1d5db;
+        border-radius: 0.75rem;
+        margin-block: 2rem;
+        padding: clamp(1rem, 3vw, 1.5rem);
+    }
+
+    .cia-career-report form {
+        display: grid;
+        gap: 0.65rem;
+        max-width: 42rem;
+    }
+
+    .cia-career-report input {
+        min-width: 0;
+        padding: 0.6rem;
+        width: 100%;
+    }
+
+    .cia-career-report button,
+    .cia-career-report a {
+        justify-self: start;
+        margin-top: 0.4rem;
+        padding: 0.65rem 1rem;
+    }
+
+    .cia-career-report-result {
+        margin-top: 1rem;
+    }
+
+    .cia-career-report-card,
+    .cia-career-report-history-card {
+        border: 1px solid #d1d5db;
+        border-radius: 0.65rem;
+        margin-top: 0.75rem;
+        padding: 1rem;
+    }
+
+    .cia-career-report-card h3,
+    .cia-career-report-history-card h4 {
+        margin-top: 0;
+    }
+
+    .cia-career-report-score {
+        color: #175cd3;
+        font-size: 1.25rem;
+        font-weight: 700;
+    }
+
+    .cia-career-archetypes {
+        display: grid;
+        gap: 0.7rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+        margin-block: 1rem;
+    }
+
+    .cia-career-archetype {
+        display: grid;
+        gap: 0.3rem;
+        grid-template-columns: 1fr auto;
+    }
+
+    .cia-career-archetype progress {
+        grid-column: 1 / -1;
+        height: 0.7rem;
+        width: 100%;
+    }
+
+    .cia-career-report-history {
+        display: grid;
+        gap: 0.75rem;
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
     }
 
     .cia-readiness-header,
@@ -438,6 +538,143 @@
         justify-content: space-between;
     }
 </style>
+
+<script>
+    (() => {
+        const form = document.getElementById('cia-career-report-form');
+        const status = document.getElementById('cia-career-report-status');
+        const result = document.getElementById('cia-career-report-result');
+        const historyStatus = document.getElementById('cia-career-report-history-status');
+        const history = document.getElementById('cia-career-report-history');
+        const archetypes = ['Builder', 'Analyst', 'Leader', 'Innovator', 'Specialist', 'Generalist'];
+
+        const appendDownloadLink = (container, url, label) => {
+            if (!url) return;
+            const link = document.createElement('a');
+            link.href = url;
+            link.textContent = label;
+            link.setAttribute('download', '');
+            container.appendChild(link);
+        };
+
+        const renderReport = (report) => {
+            const card = document.createElement('article');
+            card.className = 'cia-career-report-card';
+
+            const heading = document.createElement('h3');
+            heading.textContent = 'Your career profile';
+            const score = document.createElement('p');
+            score.className = 'cia-career-report-score';
+            score.textContent = `${Number(report.overall_employability_score).toFixed(1)} / 100 employability`;
+            card.append(heading, score);
+
+            const chart = document.createElement('div');
+            chart.className = 'cia-career-archetypes';
+            chart.setAttribute('aria-label', 'Career archetype scores');
+            archetypes.forEach((name) => {
+                const value = Math.max(0, Math.min(100, Number(report.archetype_scores?.[name]) || 0));
+                const row = document.createElement('div');
+                row.className = 'cia-career-archetype';
+                const label = document.createElement('span');
+                label.textContent = name;
+                const amount = document.createElement('span');
+                amount.textContent = `${value.toFixed(1)}%`;
+                const bar = document.createElement('progress');
+                bar.max = 100;
+                bar.value = value;
+                bar.setAttribute('aria-label', `${name}: ${value.toFixed(1)} out of 100`);
+                row.append(label, amount, bar);
+                chart.appendChild(row);
+            });
+            card.appendChild(chart);
+
+            const narrative = document.createElement('p');
+            narrative.textContent = report.narrative_summary;
+            card.appendChild(narrative);
+
+            const list = document.createElement('ol');
+            (report.recommendations || []).forEach((recommendation) => {
+                const item = document.createElement('li');
+                item.textContent = recommendation;
+                list.appendChild(item);
+            });
+            card.appendChild(list);
+            appendDownloadLink(card, report.download_url, 'Download PDF report');
+            result.replaceChildren(card);
+        };
+
+        const renderHistory = (reports) => {
+            history.replaceChildren();
+            if (!reports.length) {
+                historyStatus.textContent = 'No reports yet. Generate your first report above.';
+                return;
+            }
+
+            historyStatus.textContent = `${reports.length} recent report${reports.length === 1 ? '' : 's'}.`;
+            reports.forEach((report) => {
+                const card = document.createElement('article');
+                card.className = 'cia-career-report-history-card';
+                const heading = document.createElement('h4');
+                heading.textContent = `Career report · ${new Date(report.created_at).toLocaleDateString()}`;
+                const score = document.createElement('p');
+                score.textContent = `${Number(report.overall_employability_score).toFixed(1)} / 100 employability`;
+                card.append(heading, score);
+                appendDownloadLink(card, report.download_url, 'Download PDF');
+                history.appendChild(card);
+            });
+        };
+
+        const loadHistory = async () => {
+            try {
+                const response = await fetch('/candidate/cia/career/reports', {
+                    headers: { 'Accept': 'application/json' },
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.message || 'Report history could not be loaded.');
+                renderHistory(payload.reports || []);
+            } catch (error) {
+                historyStatus.textContent = error.message || 'Report history could not be loaded.';
+            }
+        };
+
+        form.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            const submit = document.getElementById('cia-career-report-submit');
+            submit.disabled = true;
+            status.textContent = 'Generating your career report...';
+            const skills = form.elements.skills.value
+                .split(',')
+                .map((skill) => skill.trim())
+                .filter(Boolean);
+
+            try {
+                const response = await fetch('/candidate/cia/career/generate-report', {
+                    method: 'POST',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Content-Type': 'application/json',
+                        'X-CSRF-TOKEN': form.querySelector('[name="_token"]').value,
+                    },
+                    body: JSON.stringify({
+                        target_role: form.elements.target_role.value.trim(),
+                        skills,
+                    }),
+                });
+                const payload = await response.json();
+                if (!response.ok) throw new Error(payload.message || 'Career report could not be generated.');
+                renderReport(payload.report);
+                status.textContent = payload.message;
+                await loadHistory();
+            } catch (error) {
+                status.textContent = error.message || 'Career report could not be generated.';
+            } finally {
+                submit.disabled = false;
+            }
+        });
+
+        loadHistory();
+    })();
+</script>
 
 <script>
     (() => {

@@ -1,0 +1,122 @@
+[
+  {
+    "id": "role-01",
+    "role": "Backend Software Engineer",
+    "required_skills": ["Python", "Django", "REST APIs", "PostgreSQL", "Git"],
+    "match_criteria": "Build and maintain reliable server-side applications, APIs, and data services."
+  },
+  {
+    "id": "role-02",
+    "role": "Full Stack Developer",
+    "required_skills": ["JavaScript", "React", "Node.js", "HTML/CSS", "REST APIs"],
+    "match_criteria": "Deliver end-to-end web features across responsive user interfaces and backend services."
+  },
+  {
+    "id": "role-03",
+    "role": "Frontend Developer",
+    "required_skills": ["HTML/CSS", "JavaScript", "React", "TypeScript", "Accessibility"],
+    "match_criteria": "Create accessible, responsive, and maintainable user interfaces for web products."
+  },
+  {
+    "id": "role-04",
+    "role": "Data Analyst",
+    "required_skills": ["SQL", "Excel", "Python", "Data Visualization", "Statistics"],
+    "match_criteria": "Turn business data into reliable reports, dashboards, and actionable insights."
+  },
+  {
+    "id": "role-05",
+    "role": "Data Scientist",
+    "required_skills": ["Python", "Statistics", "Machine Learning", "Pandas", "SQL"],
+    "match_criteria": "Apply statistical analysis and machine learning to answer product and business questions."
+  },
+  {
+    "id": "role-06",
+    "role": "Machine Learning Engineer",
+    "required_skills": ["Python", "Machine Learning", "TensorFlow", "APIs", "Docker"],
+    "match_criteria": "Build, evaluate, and deploy machine-learning models as production services."
+  },
+  {
+    "id": "role-07",
+    "role": "DevOps Engineer",
+    "required_skills": ["Linux", "Docker", "Kubernetes", "CI/CD", "AWS"],
+    "match_criteria": "Automate software delivery and operate scalable, dependable cloud infrastructure."
+  },
+  {
+    "id": "role-08",
+    "role": "Cloud Engineer",
+    "required_skills": ["AWS", "Terraform", "Linux", "Networking", "Docker"],
+    "match_criteria": "Provision and support secure cloud environments using infrastructure as code."
+  },
+  {
+    "id": "role-09",
+    "role": "Cybersecurity Analyst",
+    "required_skills": ["Network Security", "SIEM", "Incident Response", "Linux", "Python"],
+    "match_criteria": "Monitor systems, investigate security alerts, and support defensive incident response."
+  },
+  {
+    "id": "role-10",
+    "role": "QA Automation Engineer",
+    "required_skills": ["Selenium", "Python", "Software Testing", "API Testing", "CI/CD"],
+    "match_criteria": "Design automated tests that improve application quality and prevent regressions."
+  },
+  {
+    "id": "role-11",
+    "role": "Mobile App Developer",
+    "required_skills": ["Kotlin", "Android", "REST APIs", "Git", "Software Testing"],
+    "match_criteria": "Develop and test Android applications that integrate with backend services."
+  },
+  {
+    "id": "role-12",
+    "role": "iOS Developer",
+    "required_skills": ["Swift", "SwiftUI", "XCTest", "REST APIs", "Git"],
+    "match_criteria": "Build polished iOS applications and validate them with automated tests."
+  },
+  {
+    "id": "role-13",
+    "role": "UI/UX Designer",
+    "required_skills": ["Figma", "User Research", "Wireframing", "Prototyping", "Accessibility"],
+    "match_criteria": "Research user needs and translate them into tested, accessible interface designs."
+  },
+  {
+    "id": "role-14",
+    "role": "Product Manager",
+    "required_skills": ["Product Strategy", "User Research", "Roadmap Planning", "Analytics", "Communication"],
+    "match_criteria": "Coordinate product discovery and delivery using customer evidence and measurable outcomes."
+  },
+  {
+    "id": "role-15",
+    "role": "Business Analyst",
+    "required_skills": ["Requirements Gathering", "SQL", "Documentation", "Process Mapping", "Stakeholder Communication"],
+    "match_criteria": "Document business needs and translate stakeholder workflows into clear requirements."
+  },
+  {
+    "id": "role-16",
+    "role": "Technical Writer",
+    "required_skills": ["Technical Writing", "API Documentation", "Markdown", "Git", "Editing"],
+    "match_criteria": "Produce clear, accurate documentation for technical products and developer audiences."
+  },
+  {
+    "id": "role-17",
+    "role": "Database Administrator",
+    "required_skills": ["SQL", "PostgreSQL", "Database Backups", "Performance Tuning", "Linux"],
+    "match_criteria": "Maintain database reliability, security, backups, and query performance."
+  },
+  {
+    "id": "role-18",
+    "role": "AI Engineer",
+    "required_skills": ["Python", "Large Language Models", "Prompt Engineering", "APIs", "Vector Databases"],
+    "match_criteria": "Integrate language models and retrieval systems into useful, evaluated applications."
+  },
+  {
+    "id": "role-19",
+    "role": "Network Engineer",
+    "required_skills": ["TCP/IP", "Routing", "Switching", "Firewalls", "Network Monitoring"],
+    "match_criteria": "Configure and troubleshoot secure enterprise network connectivity and services."
+  },
+  {
+    "id": "role-20",
+    "role": "Software Support Engineer",
+    "required_skills": ["Troubleshooting", "Linux", "SQL", "Customer Communication", "Scripting"],
+    "match_criteria": "Diagnose technical product issues and provide clear, effective customer support."
+  }
+]

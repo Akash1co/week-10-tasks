@@ -1,1 +1,4 @@
 /storage/app/chromadb/
+/storage/chroma_db/
+__pycache__/
+*.py[cod]

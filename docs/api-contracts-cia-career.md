@@ -1,8 +1,9 @@
 # CIA Career Intelligence API Contract
 
 This document describes the authenticated career-intelligence endpoints. All
-paths are relative to the application origin. The original career endpoints
-remain placeholders; the skill-gap endpoint uses illustrative database
+paths are relative to the application origin. The original dashboard and
+profile endpoints remain placeholders; the Week 10 Day 5 endpoints described
+below are implemented. The skill-gap endpoint uses illustrative database
 assumptions documented in its section below.
 
 ## Conventions
@@ -472,6 +473,95 @@ and target role are sent to Groq for structured gap and priority suggestions.
 The model is configurable with `GROQ_MODEL`. Missing configuration, a failed
 request, or an invalid model response is logged and falls back to local
 benchmark-based suggestions.
+
+## 9. Week 10 Day 5 career modules
+
+All routes in this section require the authenticated candidate session and
+return JSON errors with `status: "error"` and a structured `message`.
+
+### Resume ATS scorer
+
+`POST /candidate/cia/career/ats-score`
+
+Send `multipart/form-data` with a PDF `resume` (maximum 10 MiB) and a
+`target_role` matching one of the 20 seeded roles. The response includes the
+normalized score, matched skills, and skill gaps. An unreadable or text-empty
+PDF returns `422`; process startup failures return `502`; timeouts return
+`504`.
+
+### Readiness score engine
+
+`POST /candidate/cia/career/readiness-scores`
+
+Send the same JSON body as the skill-gap endpoint. The response includes the
+normalized readiness score and radar data. An empty profile produces zero
+candidate scores and does not divide by zero.
+
+### Career intelligence report
+
+`POST /candidate/cia/career/generate-report`
+
+Request body:
+
+```json
+{
+  "target_role": "Full Stack Developer",
+  "skills": ["JavaScript", "React", "Node.js"],
+  "profile": {}
+}
+```
+
+Returns a report identifier, six archetype scores, and a summary. The PDF is
+stored in the authenticated candidate's private report area and is not exposed
+as a filesystem path in the response. Configured Groq requests fail over to
+OpenRouter on provider timeouts and server errors; when neither provider is
+available, the deterministic report summary remains usable.
+
+### Vector internship matcher
+
+`POST /candidate/cia/career/match-internships`
+
+Request body:
+
+```json
+{
+  "skills": ["PHP", "Laravel", "JavaScript", "MySQL", "Git"]
+}
+```
+
+`skills` may be omitted to use the standard candidate profile. The response
+contains five role matches, cosine-derived percentages, and normalized
+`skill_gaps`. The persistent `internship_roles` collection is seeded from the
+20-role dataset when any dataset records are missing.
+
+### Skill gap analyzer
+
+`POST /candidate/cia/career/skill-gap`
+
+`target_role` remains required. An optional `skills` string array adds
+case-insensitive, whitespace-normalized `matched_skills` and `skill_gaps`
+against the selected role; existing readiness, radar, and learning-priority
+fields remain available.
+
+### Learning path generator
+
+`POST /candidate/cia/career/learning-path`
+
+Accepts `target_role`, optional `skills`, `skill_gaps`, `experience_level`,
+`weekly_hours`, and `profile`. The service validates its structured eight-week,
+seven-days-per-week response before returning it.
+
+### Report history and PDF download
+
+- `GET /candidate/cia/career/reports` lists only the authenticated candidate's
+  generated reports.
+- `GET /candidate/cia/career/reports/{id}/download` streams a PDF only when the
+  report belongs to the authenticated candidate. Unknown and other-candidate
+  identifiers return the same `404` response.
+
+PDF output is produced by the dependency-free report generator in this checkout.
+This repository does not include a Composer manifest or Dompdf installation,
+so Dompdf rendering is not claimed or required by the implemented path.
 
 ## Errors
 

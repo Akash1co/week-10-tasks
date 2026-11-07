@@ -3,6 +3,22 @@
 use App\Http\Controllers\CiaController;
 use Illuminate\Support\Facades\Route;
 
+Route::post('/candidate/cia/career/ats-score', [CiaController::class, 'atsScore'])
+    ->middleware(['auth'])
+    ->name('cia.career.ats_score');
+
+Route::post('/candidate/cia/career/readiness-scores', [CiaController::class, 'readinessScores'])
+    ->middleware(['auth'])
+    ->name('cia.career.readiness_scores');
+
+Route::post('/candidate/cia/career/generate-report', [CiaController::class, 'generateReport'])
+    ->middleware(['auth'])
+    ->name('cia.career.generate_report');
+
+Route::post('/candidate/cia/career/match-internships', [CiaController::class, 'matchInternships'])
+    ->middleware(['auth'])
+    ->name('cia.career.match_internships');
+
 Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'])
     ->middleware(['auth'])
     ->name('cia.career.skill_gap');
@@ -18,6 +34,15 @@ Route::post('/candidate/cia/career/learning-path', [CiaController::class, 'learn
 Route::post('/candidate/cia/career/vector-search', [CiaController::class, 'vectorSearch'])
     ->middleware(['auth'])
     ->name('cia.career.vector_search');
+
+Route::get('/candidate/cia/career/reports', [CiaController::class, 'reports'])
+    ->middleware(['auth'])
+    ->name('cia.career.reports');
+
+Route::get('/candidate/cia/career/reports/{id}/download', [CiaController::class, 'downloadReport'])
+    ->middleware(['auth'])
+    ->whereNumber('id')
+    ->name('cia.career.reports.download');
 
 Route::prefix('cia/career')
     ->middleware(['auth'])

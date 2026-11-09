@@ -4,13 +4,12 @@ namespace App\Http\Controllers;
 
 use App\Models\LessonUser;
 use App\Models\QuizAttempt;
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Exception\ProcessStartFailedException;
 use Symfony\Component\Process\Exception\ProcessTimedOutException;
 use Symfony\Component\Process\Process;
@@ -36,9 +35,12 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function skillGap(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120'],
         ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
 
         $candidateId = $request->user()->getAuthIdentifier();
         $completedLessons = LessonUser::query()
@@ -97,6 +99,9 @@ class CiaController extends \Illuminate\Routing\Controller
         ];
         $readinessScore = $this->calculateReadinessScore($candidateScores, $targetScores);
         $analysis = $this->requestGroqAnalysis($skillProfile, $radarData);
+        if ($analysis instanceof JsonResponse) {
+            return $analysis;
+        }
 
         return response()->json([
             'score' => $readinessScore,
@@ -108,7 +113,7 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function careerRecommendations(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120'],
             'skills' => ['sometimes', 'array', 'max:50'],
             'skills.*' => ['string', 'max:120'],
@@ -116,6 +121,9 @@ class CiaController extends \Illuminate\Routing\Controller
             'skill_gaps.*' => ['string', 'max:120'],
             'profile' => ['sometimes', 'array'],
         ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
 
         $payload = [
             'candidate_id' => (string) $request->user()->getAuthIdentifier(),
@@ -132,7 +140,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => 'Unable to prepare recommendation input.'], 500);
+            return $this->errorResponse('Unable to prepare recommendation input.', 500);
         }
 
         $process = new Process([
@@ -145,59 +153,87 @@ class CiaController extends \Illuminate\Routing\Controller
         try {
             $process->run();
         } catch (ProcessStartFailedException $exception) {
-            $result = ['message' => 'Vector search could not be started.'];
-            $logId = $this->logVectorSearch($candidateId, $payload, $result);
-            Log::error('CIA vector search process could not be started.', [
-                'candidate_id' => $candidateId,
+            $result = ['status' => 'failed', 'message' => 'Career recommendations could not be started.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
+            Log::error('CIA career recommendation process could not be started.', [
+                'candidate_id' => $payload['candidate_id'],
                 'log_id' => $logId,
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json($result, 502);
+            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
         } catch (ProcessTimedOutException $exception) {
+            $result = ['status' => 'failed', 'message' => 'Career recommendations timed out.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
             Log::warning('Career recommendation agent timed out.', [
                 'candidate_id' => $payload['candidate_id'],
+                'log_id' => $logId,
             ]);
 
-            return response()->json(['message' => 'Career recommendations timed out. Please try again.'], 504);
+            return $this->errorResponse(
+                'Career recommendations timed out. Please try again.',
+                504,
+                ['log_id' => $logId]
+            );
+        } catch (\Throwable $exception) {
+            $result = ['status' => 'failed', 'message' => 'Career recommendations could not be generated.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
+            Log::error('Career recommendation process could not be completed.', [
+                'candidate_id' => $payload['candidate_id'],
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
         }
 
         if (! $process->isSuccessful()) {
+            $result = ['status' => 'failed', 'message' => 'Career recommendations could not be generated.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
             Log::error('Career recommendation agent failed.', [
                 'candidate_id' => $payload['candidate_id'],
+                'log_id' => $logId,
                 'exit_code' => $process->getExitCode(),
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return response()->json(['message' => 'Career recommendations could not be generated.'], 502);
+            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
         }
 
         try {
             $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
+            $failure = ['status' => 'failed', 'message' => 'Career recommendation service returned invalid JSON.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $failure);
             Log::error('Career recommendation agent returned invalid JSON.', [
                 'candidate_id' => $payload['candidate_id'],
+                'log_id' => $logId,
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => 'Career recommendation service returned an invalid response.'], 502);
+            return $this->errorResponse(
+                'Career recommendation service returned an invalid response.',
+                502,
+                ['log_id' => $logId]
+            );
         }
 
-        if (! is_array($result) || ! isset($result['career_paths']) || count($result['career_paths']) !== 3) {
+        if (
+            ! is_array($result)
+            || ! is_array($result['career_paths'] ?? null)
+            || count($result['career_paths']) !== 3
+        ) {
+            $failure = ['status' => 'failed', 'message' => 'Career recommendation service returned an invalid response.'];
+            $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $failure);
             Log::error('Career recommendation agent returned an invalid response shape.', [
                 'candidate_id' => $payload['candidate_id'],
+                'log_id' => $logId,
             ]);
 
-            return response()->json(['message' => 'Career recommendation service returned an invalid response.'], 502);
+            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
         }
 
-        $logId = DB::table('cia_search_logs')->insertGetId([
-            'candidate_id' => $payload['candidate_id'],
-            'request_payload' => json_encode($payload, JSON_THROW_ON_ERROR),
-            'results' => json_encode($result, JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
 
         return response()->json([
             'log_id' => $logId,
@@ -207,7 +243,7 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function learningPath(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120', 'regex:/\S/'],
             'skills' => ['sometimes', 'array', 'max:50'],
             'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
@@ -217,6 +253,9 @@ class CiaController extends \Illuminate\Routing\Controller
             'weekly_hours' => ['sometimes', 'integer', 'min:1', 'max:40'],
             'profile' => ['sometimes', 'array', 'max:50'],
         ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
         $candidateId = (string) $request->user()->getAuthIdentifier();
         $input = [
             'target_role' => trim($validated['target_role']),
@@ -236,7 +275,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => 'Unable to prepare learning path input.'], 500);
+            return $this->errorResponse('Unable to prepare learning path input.', 500);
         }
 
         $process = new Process([
@@ -264,7 +303,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+            return $this->errorResponse($message, 502, ['log_id' => $logId]);
         } catch (ProcessTimedOutException $exception) {
             $message = 'Learning path generation timed out. Please try again.';
             $logId = $this->logLearningPath($candidateId, $requestPayload, [
@@ -276,7 +315,20 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return response()->json(['message' => $message, 'log_id' => $logId], 504);
+            return $this->errorResponse($message, 504, ['log_id' => $logId]);
+        } catch (\Throwable $exception) {
+            $message = 'Learning path could not be generated.';
+            $logId = $this->logLearningPath($candidateId, $requestPayload, [
+                'status' => 'failed',
+                'message' => $message,
+            ]);
+            Log::error('CIA learning path process could not be completed.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse($message, 502, ['log_id' => $logId]);
         }
 
         if (! $process->isSuccessful()) {
@@ -292,7 +344,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+            return $this->errorResponse($message, 502, ['log_id' => $logId]);
         }
 
         try {
@@ -309,7 +361,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+            return $this->errorResponse($message, 502, ['log_id' => $logId]);
         }
 
         if (
@@ -336,7 +388,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return response()->json(['message' => $message, 'log_id' => $logId], 502);
+            return $this->errorResponse($message, 502, ['log_id' => $logId]);
         }
 
         $logId = $this->logLearningPath(
@@ -350,10 +402,13 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function vectorSearch(Request $request): JsonResponse
     {
-        $validated = $request->validate([
+        $validated = $this->validateRequest($request, [
             'skills' => ['required', 'array', 'min:1', 'max:50'],
             'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
         ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
         $candidateId = (string) $request->user()->getAuthIdentifier();
         $payload = [
             'candidate_id' => $candidateId,
@@ -368,7 +423,7 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json(['message' => 'Unable to prepare vector-search input.'], 500);
+            return $this->errorResponse('Unable to prepare vector-search input.', 500);
         }
 
         $process = new Process([
@@ -386,20 +441,40 @@ class CiaController extends \Illuminate\Routing\Controller
 
         try {
             $process->run();
+        } catch (ProcessStartFailedException $exception) {
+            $failure = ['message' => 'Vector search service could not be started.'];
+            $logId = $this->logSearchRequest($candidateId, $payload, $failure);
+            Log::error('CIA vector search process could not be started.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
         } catch (ProcessTimedOutException $exception) {
             $result = ['message' => 'Vector search timed out.'];
-            $logId = $this->logVectorSearch($candidateId, $payload, $result);
+            $logId = $this->logSearchRequest($candidateId, $payload, $result);
             Log::warning('CIA vector search timed out.', [
                 'candidate_id' => $candidateId,
                 'log_id' => $logId,
             ]);
 
-            return response()->json($result, 504);
+            return $this->errorResponse($result['message'], 504, ['log_id' => $logId]);
+        } catch (\Throwable $exception) {
+            $failure = ['message' => 'Vector search could not be completed.'];
+            $logId = $this->logSearchRequest($candidateId, $payload, $failure);
+            Log::error('CIA vector search process could not be completed.', [
+                'candidate_id' => $candidateId,
+                'log_id' => $logId,
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
         }
 
         if (! $process->isSuccessful()) {
             $result = ['message' => 'Vector search could not be completed.'];
-            $logId = $this->logVectorSearch($candidateId, $payload, $result);
+            $logId = $this->logSearchRequest($candidateId, $payload, $result);
             Log::error('CIA vector search process failed.', [
                 'candidate_id' => $candidateId,
                 'log_id' => $logId,
@@ -407,21 +482,21 @@ class CiaController extends \Illuminate\Routing\Controller
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return response()->json($result, 502);
+            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
         }
 
         try {
             $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
             $failure = ['message' => 'Vector search returned an invalid response.'];
-            $logId = $this->logVectorSearch($candidateId, $payload, $failure);
+            $logId = $this->logSearchRequest($candidateId, $payload, $failure);
             Log::error('CIA vector search returned invalid JSON.', [
                 'candidate_id' => $candidateId,
                 'log_id' => $logId,
                 'exception' => $exception->getMessage(),
             ]);
 
-            return response()->json($failure, 502);
+            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
         }
 
         if (
@@ -431,16 +506,16 @@ class CiaController extends \Illuminate\Routing\Controller
             || count($result['matches']) !== 5
         ) {
             $failure = ['message' => 'Vector search returned an invalid response.'];
-            $logId = $this->logVectorSearch($candidateId, $payload, $failure);
+            $logId = $this->logSearchRequest($candidateId, $payload, $failure);
             Log::error('CIA vector search returned an invalid response shape.', [
                 'candidate_id' => $candidateId,
                 'log_id' => $logId,
             ]);
 
-            return response()->json($failure, 502);
+            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
         }
 
-        $logId = $this->logVectorSearch($candidateId, $payload, $result);
+        $logId = $this->logSearchRequest($candidateId, $payload, $result);
 
         return response()->json([
             'log_id' => $logId,
@@ -456,6 +531,7 @@ class CiaController extends \Illuminate\Routing\Controller
     {
         return DB::table('cia_search_logs')->insertGetId([
             'candidate_id' => $candidateId,
+            'target_role' => $requestPayload['target_role'] ?? null,
             'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
             'results' => json_encode($results, JSON_THROW_ON_ERROR),
             'created_at' => now(),
@@ -467,10 +543,11 @@ class CiaController extends \Illuminate\Routing\Controller
      * @param  array<string, mixed>  $requestPayload
      * @param  array<string, mixed>  $results
      */
-    private function logVectorSearch(string $candidateId, array $requestPayload, array $results): int
+    private function logSearchRequest(string $candidateId, array $requestPayload, array $results): int
     {
         return DB::table('cia_search_logs')->insertGetId([
             'candidate_id' => $candidateId,
+            'target_role' => $requestPayload['target_role'] ?? null,
             'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
             'results' => json_encode($results, JSON_THROW_ON_ERROR),
             'created_at' => now(),
@@ -481,83 +558,177 @@ class CiaController extends \Illuminate\Routing\Controller
     /**
      * @param  array<string, mixed>  $skillProfile
      * @param  array{labels: list<string>, candidate_scores: list<float>, target_scores: list<int>}  $radarData
-     * @return array{gaps: list<string>, priority_learning: list<string>}
+     * @return array{gaps: list<string>, priority_learning: list<string>}|JsonResponse
      */
-    private function requestGroqAnalysis(array $skillProfile, array $radarData): array
+    private function requestGroqAnalysis(array $skillProfile, array $radarData): array|JsonResponse
     {
         $fallback = $this->buildMockAnalysis($radarData);
         $apiKey = config('services.groq.api_key') ?: env('GROQ_API_KEY');
+        $openRouterKey = config('services.openrouter.api_key') ?: env('OPENROUTER_API_KEY');
 
-        if (! is_string($apiKey) || trim($apiKey) === '') {
-            Log::notice('Groq skill-gap analysis is not configured; using mock analysis.');
-
-            return $fallback;
-        }
-
-        $profilePayload = json_encode([
-            'skill_profile' => $skillProfile,
-            'target_role' => $skillProfile['target_role'],
-            'radar_data' => $radarData,
-        ]);
-
-        if (! is_string($profilePayload)) {
-            Log::warning('Groq skill-gap profile could not be encoded; using mock analysis.');
+        if (
+            (! is_string($apiKey) || trim($apiKey) === '')
+            && (! is_string($openRouterKey) || trim($openRouterKey) === '')
+        ) {
+            Log::notice('LLM providers are not configured; using mock skill-gap analysis.');
 
             return $fallback;
         }
 
         try {
-            $response = Http::withToken($apiKey)
-                ->acceptJson()
-                ->timeout(25)
-                ->post('https://api.groq.com/openai/v1/chat/completions', [
-                    'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
-                    'temperature' => 0.2,
-                    'response_format' => ['type' => 'json_object'],
-                    'messages' => [
-                        [
-                            'role' => 'system',
-                            'content' => 'Analyze the skill profile for the target role. Return only a JSON object with string arrays "gaps" and "priority_learning". Identify actionable gaps by comparing candidate scores to target scores. This is a LlamaIndex-style structured analysis prompt.',
-                        ],
-                        [
-                            'role' => 'user',
-                            'content' => $profilePayload,
-                        ],
+            $input = json_encode([
+                'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+                'temperature' => 0.2,
+                'response_format' => ['type' => 'json_object'],
+                'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => 'Analyze the skill profile for the target role. Return only a JSON object with string arrays "gaps" and "priority_learning". Identify actionable gaps by comparing candidate scores to target scores.',
                     ],
-                ]);
-        } catch (ConnectionException $exception) {
-            Log::warning('Groq skill-gap request failed to connect; using mock analysis.', [
+                    [
+                        'role' => 'user',
+                        'content' => json_encode([
+                            'skill_profile' => $skillProfile,
+                            'target_role' => $skillProfile['target_role'],
+                            'radar_data' => $radarData,
+                        ], JSON_THROW_ON_ERROR),
+                    ],
+                ],
+            ], JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('Groq skill-gap profile could not be encoded.', [
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $fallback;
+            return $this->errorResponse('Unable to prepare skill-gap analysis input.', 500);
         }
 
-        if (! $response->successful()) {
-            Log::warning('Groq skill-gap request returned an unsuccessful response; using mock analysis.', [
-                'status' => $response->status(),
+        $process = new Process([
+            (string) env('CIA_PYTHON_BINARY', 'python'),
+            base_path('scripts/llm_provider_fallback.py'),
+        ], base_path());
+        $process->setInput($input);
+        $process->setEnv([
+            'GROQ_API_KEY' => is_string($apiKey) ? $apiKey : '',
+            'GROQ_MODEL' => (string) env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
+            'OPENROUTER_API_KEY' => is_string($openRouterKey) ? $openRouterKey : '',
+            'OPENROUTER_MODEL' => (string) env('OPENROUTER_MODEL', 'openai/gpt-4o-mini'),
+        ]);
+        $process->setTimeout(55);
+
+        try {
+            $process->run();
+        } catch (ProcessStartFailedException $exception) {
+            Log::error('CIA LLM failover process could not be started.', [
+                'exception' => $exception->getMessage(),
             ]);
 
-            return $fallback;
+            return $this->errorResponse('Skill-gap analysis service could not be started.', 502);
+        } catch (ProcessTimedOutException $exception) {
+            Log::warning('CIA LLM failover process timed out.');
+
+            return $this->errorResponse('Skill-gap analysis timed out. Please try again.', 504);
+        } catch (\Throwable $exception) {
+            Log::error('CIA LLM failover process could not be completed.', [
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse('Skill-gap analysis could not be completed.', 502);
         }
 
-        $content = $response->json('choices.0.message.content');
-        $decoded = is_string($content) ? json_decode($content, true) : null;
+        try {
+            $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
+        } catch (\JsonException $exception) {
+            Log::error('CIA LLM failover process returned invalid JSON.', [
+                'exception' => $exception->getMessage(),
+                'stderr' => $process->getErrorOutput(),
+            ]);
 
+            return $this->errorResponse('Skill-gap analysis service returned an invalid response.', 502);
+        }
+
+        if (! $process->isSuccessful() || ! is_array($result) || ($result['status'] ?? null) !== 'ok') {
+            $httpStatus = is_array($result) && ($result['http_status'] ?? null) === 504 ? 504 : 502;
+            Log::warning('CIA LLM provider request failed.', [
+                'http_status' => $httpStatus,
+                'stderr' => $process->getErrorOutput(),
+            ]);
+
+            return $this->errorResponse(
+                is_array($result) && is_string($result['message'] ?? null)
+                    ? $result['message']
+                    : 'Skill-gap analysis providers are currently unavailable.',
+                $httpStatus
+            );
+        }
+
+        $decoded = json_decode($result['content'] ?? '', true);
         if (
             ! is_array($decoded)
             || ! $this->isStringList($decoded['gaps'] ?? null)
             || ! $this->isStringList($decoded['priority_learning'] ?? null)
         ) {
-            Log::warning('Groq skill-gap response had an invalid JSON shape; using mock analysis.');
+            Log::warning('LLM skill-gap response had an invalid JSON shape.');
 
-            return $fallback;
+            return $this->errorResponse('Skill-gap analysis service returned an invalid response.', 502);
         }
 
         return [
             'gaps' => array_values(array_slice($decoded['gaps'], 0, 10)),
             'priority_learning' => array_values(array_slice($decoded['priority_learning'], 0, 10)),
         ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $rules
+     * @return array<string, mixed>|JsonResponse
+     */
+    private function validateRequest(Request $request, array $rules): array|JsonResponse
+    {
+        try {
+            return $request->validate($rules);
+        } catch (ValidationException $exception) {
+            return response()->json([
+                'status' => 'error',
+                'message' => 'The provided data is invalid.',
+                'errors' => $exception->errors(),
+            ], 422);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $extra
+     */
+    private function errorResponse(string $message, int $status, array $extra = []): JsonResponse
+    {
+        return response()->json([
+            'status' => 'error',
+            'message' => $message,
+            ...$extra,
+        ], $status);
+    }
+
+    public function searchHistory(Request $request): JsonResponse
+    {
+        $validated = $this->validateRequest($request, [
+            'target_role' => ['sometimes', 'string', 'max:120'],
+        ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
+
+        $query = DB::table('cia_search_logs')
+            ->where('candidate_id', (string) $request->user()->getAuthIdentifier());
+        if (isset($validated['target_role'])) {
+            $query->where('target_role', trim($validated['target_role']));
+        }
+
+        return response()->json([
+            'search_history' => $query
+                ->orderByDesc('created_at')
+                ->limit(50)
+                ->get(['id', 'target_role', 'request_payload', 'results', 'created_at']),
+        ]);
     }
 
     /**

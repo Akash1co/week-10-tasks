@@ -1,12 +1,10 @@
 """Performance and provider failover checks for CIA Career Intelligence."""
 
-import io
-import json
+import os
 import sys
 import time
 import tracemalloc
 import unittest
-from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -18,7 +16,7 @@ PROJECT_ROOT = SCRIPT_DIRECTORY.parent
 CHROMA_DIRECTORY = PROJECT_ROOT / "storage" / "chroma_db"
 sys.path.insert(0, str(SCRIPT_DIRECTORY))
 
-from llm_provider_fallback import ProviderTimeout, main  # noqa: E402
+from llm_provider_fallback import ProviderFailure, complete_with_fallback  # noqa: E402
 
 
 class TestCiaCareerPerformance(unittest.TestCase):
@@ -98,55 +96,46 @@ class TestCiaCareerPerformance(unittest.TestCase):
             tracemalloc.stop()
 
     def test_02_groq_timeout_fallback_simulation(self) -> None:
-        stdout = io.StringIO()
         with (
-            patch("sys.stdin", io.StringIO(json.dumps({
-                "model": "test-model",
-                "messages": [{"role": "user", "content": "test prompt"}],
-            }))),
+            patch.dict(os.environ, {
+                "GROQ_API_KEY": "test-groq-key",
+                "OPENROUTER_API_KEY": "test-openrouter-key",
+            }),
             patch(
                 "llm_provider_fallback.call_groq",
-                side_effect=ProviderTimeout("simulated 504 timeout"),
+                side_effect=ProviderFailure("simulated 504 timeout", 504),
             ) as groq_call,
             patch(
                 "llm_provider_fallback.call_openrouter",
                 return_value="fallback response",
             ) as openrouter_call,
-            redirect_stdout(stdout),
         ):
-            exit_code = main()
+            response = complete_with_fallback("test prompt")
 
-        response = json.loads(stdout.getvalue())
-        self.assertEqual(exit_code, 0)
-        self.assertEqual(response["status"], "ok")
+        self.assertEqual(response["status"], "success")
         self.assertEqual(response["provider"], "openrouter")
-        self.assertEqual(response["content"], "fallback response")
+        self.assertEqual(response["data"]["response"], "fallback response")
         groq_call.assert_called_once()
         openrouter_call.assert_called_once()
-        self.assertNotIn("Traceback", stdout.getvalue())
 
-        timeout_stdout = io.StringIO()
         with (
-            patch("sys.stdin", io.StringIO(json.dumps({
-                "messages": [{"role": "user", "content": "test prompt"}],
-            }))),
+            patch.dict(os.environ, {
+                "GROQ_API_KEY": "test-groq-key",
+                "OPENROUTER_API_KEY": "test-openrouter-key",
+            }),
             patch(
                 "llm_provider_fallback.call_groq",
-                side_effect=ProviderTimeout("simulated 504 timeout"),
+                side_effect=ProviderFailure("simulated 504 timeout", 504),
             ),
             patch(
                 "llm_provider_fallback.call_openrouter",
-                side_effect=ProviderTimeout("simulated fallback timeout"),
+                side_effect=ProviderFailure("simulated fallback timeout", 504),
             ),
-            redirect_stdout(timeout_stdout),
         ):
-            timeout_exit_code = main()
+            timeout_response = complete_with_fallback("test prompt")
 
-        timeout_response = json.loads(timeout_stdout.getvalue())
-        self.assertEqual(timeout_exit_code, 1)
         self.assertEqual(timeout_response["status"], "error")
-        self.assertEqual(timeout_response["http_status"], 504)
-        self.assertNotIn("Traceback", timeout_stdout.getvalue())
+        self.assertEqual(timeout_response["code"], 504)
 
 
 if __name__ == "__main__":

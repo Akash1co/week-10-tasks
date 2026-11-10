@@ -1,152 +1,212 @@
 """Call Groq with an OpenRouter fallback and emit a controlled JSON response."""
 
+import argparse
 import json
-import logging
+import math
 import os
-import socket
 import sys
+import time
+from datetime import datetime, timezone
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import requests
 
 
-LOGGER = logging.getLogger(__name__)
-TIMEOUT_SECONDS = 25
+GROQ_MODEL = "llama-3.3-70b-versatile"
+OPENROUTER_MODEL = "meta-llama/llama-3.3-70b-instruct"
+GROQ_TIMEOUT_SECONDS = 5.0
+OPENROUTER_TIMEOUT_SECONDS = 7.0
+MAX_TOKENS_LIMIT = 8192
 
 
-class ProviderError(Exception):
-    """A provider request failed without a timeout."""
+class ArgumentValidationError(ValueError):
+    """A CLI argument is missing or malformed."""
 
 
-class ProviderTimeout(ProviderError):
-    """A provider request timed out or returned a timeout status."""
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise ArgumentValidationError(message)
 
 
-def _request_completion(
+class ProviderFailure(Exception):
+    """A provider request failed with a controlled status code."""
+
+    def __init__(self, message: str, code: int = 502) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def _error_payload(message: str, code: int) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "provider": "failed_all",
+        "code": code,
+        "message": message,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _post_completion(
     *,
     endpoint: str,
     api_key: str,
     model: str,
-    payload: dict[str, Any],
+    prompt: str,
+    temperature: float,
+    max_tokens: int,
+    timeout: float,
 ) -> str:
-    if not api_key:
-        raise ProviderError("Provider API key is not configured.")
-
-    body = {**payload, "model": model}
-    request = Request(
-        endpoint,
-        data=json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            result = json.loads(response.read().decode("utf-8"))
-    except HTTPError as exception:
-        if exception.code in {408, 504}:
-            raise ProviderTimeout from exception
-        raise ProviderError from exception
-    except (TimeoutError, socket.timeout) as exception:
-        raise ProviderTimeout from exception
-    except URLError as exception:
-        if isinstance(exception.reason, (TimeoutError, socket.timeout)):
-            raise ProviderTimeout from exception
-        raise ProviderError from exception
-    except OSError as exception:
-        raise ProviderError from exception
-    except (UnicodeDecodeError, json.JSONDecodeError) as exception:
-        raise ProviderError from exception
+    if not api_key.strip():
+        raise ProviderFailure("Provider API key is missing or blank.")
 
     try:
+        response = requests.post(
+            endpoint,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            json={
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": temperature,
+                "max_tokens": max_tokens,
+            },
+            timeout=timeout,
+        )
+        response.raise_for_status()
+    except requests.Timeout as exception:
+        raise ProviderFailure(
+            f"{type(exception).__name__} after {timeout:.1f} seconds.",
+            504,
+        ) from exception
+    except requests.HTTPError as exception:
+        status = exception.response.status_code if exception.response is not None else 0
+        if status == 429:
+            raise ProviderFailure("HTTP 429 rate limit exceeded.", 502) from exception
+        if status in {500, 502, 503, 504}:
+            raise ProviderFailure(
+                f"HTTP {status} provider server error.",
+                504 if status == 504 else 502,
+            ) from exception
+        raise ProviderFailure(
+            f"HTTP {status} provider request failed.",
+            502,
+        ) from exception
+    except requests.RequestException as exception:
+        raise ProviderFailure(
+            f"{type(exception).__name__}: provider network request failed.",
+            502,
+        ) from exception
+
+    try:
+        result = response.json()
         content = result["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exception:
-        raise ProviderError from exception
+    except (ValueError, KeyError, IndexError, TypeError) as exception:
+        raise ProviderFailure("Provider returned malformed JSON data.", 502) from exception
     if not isinstance(content, str):
-        raise ProviderError("Provider returned an invalid response.")
+        raise ProviderFailure("Provider returned a non-string response.", 502)
     return content
 
 
-def call_groq(payload: dict[str, Any]) -> str:
-    return _request_completion(
+def call_groq(prompt: str, temperature: float, max_tokens: int) -> str:
+    return _post_completion(
         endpoint="https://api.groq.com/openai/v1/chat/completions",
-        api_key=os.getenv("GROQ_API_KEY", "").strip(),
-        model=os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile"),
-        payload=payload,
+        api_key=os.getenv("GROQ_API_KEY", ""),
+        model=GROQ_MODEL,
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=GROQ_TIMEOUT_SECONDS,
     )
 
 
-def call_openrouter(payload: dict[str, Any]) -> str:
-    return _request_completion(
+def call_openrouter(prompt: str, temperature: float, max_tokens: int) -> str:
+    return _post_completion(
         endpoint="https://openrouter.ai/api/v1/chat/completions",
-        api_key=os.getenv("OPENROUTER_API_KEY", "").strip(),
-        model=os.getenv("OPENROUTER_MODEL", "openai/gpt-4o-mini"),
-        payload=payload,
+        api_key=os.getenv("OPENROUTER_API_KEY", ""),
+        model=OPENROUTER_MODEL,
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=OPENROUTER_TIMEOUT_SECONDS,
     )
 
 
-def complete_with_fallback(payload: dict[str, Any]) -> dict[str, Any]:
-    primary_timed_out = False
+def complete_with_fallback(
+    prompt: str,
+    temperature: float = 0.7,
+    max_tokens: int = 1024,
+) -> dict[str, Any]:
+    if not prompt.strip():
+        return _error_payload("Prompt must not be empty or whitespace-only.", 422)
+    if not math.isfinite(temperature) or not 0 <= temperature <= 2:
+        return _error_payload("Temperature must be a finite number between 0 and 2.", 422)
+    if not 1 <= max_tokens <= MAX_TOKENS_LIMIT:
+        return _error_payload(f"max_tokens must be between 1 and {MAX_TOKENS_LIMIT}.", 422)
+
+    primary_error: ProviderFailure
     try:
+        started = time.perf_counter()
+        content = call_groq(prompt, temperature, max_tokens)
+        ended = time.perf_counter()
         return {
-            "status": "ok",
+            "status": "success",
             "provider": "groq",
-            "content": call_groq(payload),
+            "model": GROQ_MODEL,
+            "data": {"response": content},
+            "latency_ms": round((ended - started) * 1000, 2),
         }
-    except ProviderError as primary_error:
-        primary_timed_out = isinstance(primary_error, ProviderTimeout)
-        LOGGER.warning(
-            "Groq request failed; attempting OpenRouter fallback (%s).",
-            "timeout" if primary_timed_out else "provider_error",
+    except ProviderFailure as exception:
+        primary_error = exception
+        timestamp = datetime.now(timezone.utc).isoformat()
+        print(
+            f"[Groq Failover Alert]: {timestamp} {primary_error}",
+            file=sys.stderr,
         )
 
     try:
+        started = time.perf_counter()
+        content = call_openrouter(prompt, temperature, max_tokens)
+        ended = time.perf_counter()
         return {
-            "status": "ok",
+            "status": "success",
             "provider": "openrouter",
-            "content": call_openrouter(payload),
+            "model": OPENROUTER_MODEL,
+            "data": {"response": content},
+            "latency_ms": round((ended - started) * 1000, 2),
         }
-    except ProviderError as fallback_error:
-        timed_out = primary_timed_out or isinstance(fallback_error, ProviderTimeout)
-        LOGGER.error("OpenRouter fallback failed (%s).", "timeout" if timed_out else "provider_error")
-        return {
-            "status": "error",
-            "message": "LLM providers are currently unavailable.",
-            "http_status": 504 if timed_out else 502,
-        }
+    except ProviderFailure as fallback_error:
+        return _error_payload(
+            "Both LLM providers failed. "
+            f"Groq: {primary_error}; OpenRouter: {fallback_error}",
+            fallback_error.code,
+        )
 
 
-def main() -> int:
+def _build_parser() -> ArgumentParser:
+    parser = ArgumentParser(description=__doc__)
+    parser.add_argument("--prompt", required=True, help="User prompt payload.")
+    parser.add_argument("--temperature", type=float, default=0.7)
+    parser.add_argument("--max-tokens", type=int, default=1024)
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
     try:
-        payload = json.load(sys.stdin)
-    except (json.JSONDecodeError, UnicodeDecodeError):
-        sys.stdout.write(json.dumps({
-            "status": "error",
-            "message": "Request body must be valid JSON.",
-            "http_status": 422,
-        }) + "\n")
-        return 1
+        arguments = _build_parser().parse_args(argv)
+        result = complete_with_fallback(
+            arguments.prompt,
+            arguments.temperature,
+            arguments.max_tokens,
+        )
+    except ArgumentValidationError as exception:
+        result = _error_payload(str(exception), 422)
 
-    if (
-        not isinstance(payload, dict)
-        or not isinstance(payload.get("messages"), list)
-        or not payload["messages"]
-    ):
-        sys.stdout.write(json.dumps({
-            "status": "error",
-            "message": "A non-empty messages array is required.",
-            "http_status": 422,
-        }) + "\n")
-        return 1
-
-    result = complete_with_fallback(payload)
     sys.stdout.write(json.dumps(result, ensure_ascii=False) + "\n")
-    return 0 if result["status"] == "ok" else 1
+    return 0 if result["status"] == "success" else 1
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
     raise SystemExit(main())

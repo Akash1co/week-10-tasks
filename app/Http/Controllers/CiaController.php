@@ -8,6 +8,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Process as ProcessFacade;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\Process\Exception\ProcessStartFailedException;
@@ -109,6 +110,79 @@ class CiaController extends \Illuminate\Routing\Controller
             'priority_learning' => $analysis['priority_learning'],
             'radar_data' => $radarData,
         ]);
+    }
+
+    public function careerFallback(Request $request): JsonResponse
+    {
+        $validated = $this->validateRequest($request, [
+            'prompt' => ['required', 'string', 'min:3', 'regex:/\S/'],
+        ]);
+        if ($validated instanceof JsonResponse) {
+            return $validated;
+        }
+
+        try {
+            $process = ProcessFacade::timeout(15)
+                ->env([
+                    'GROQ_API_KEY' => (string) (config('services.groq.api_key') ?: env('GROQ_API_KEY', '')),
+                    'OPENROUTER_API_KEY' => (string) (
+                        config('services.openrouter.api_key') ?: env('OPENROUTER_API_KEY', '')
+                    ),
+                ])
+                ->run([
+                    (string) env('CIA_PYTHON_BINARY', 'python'),
+                    base_path('scripts/llm_provider_fallback.py'),
+                    '--prompt',
+                    $validated['prompt'],
+                ]);
+        } catch (ProcessTimedOutException $exception) {
+            Log::error('CIA LLM Failure', [
+                'message' => 'LLM provider process exceeded its 15-second deadline.',
+            ]);
+
+            return $this->errorResponse('LLM provider process timed out.', 504);
+        } catch (ProcessStartFailedException $exception) {
+            Log::error('CIA LLM Failure', [
+                'message' => 'LLM provider process could not be started.',
+                'exception' => $exception->getMessage(),
+            ]);
+
+            return $this->errorResponse('LLM provider process could not be started.', 502);
+        }
+
+        $decoded = json_decode($process->output(), true);
+        if (
+            $process->failed()
+            || ! is_array($decoded)
+            || ($decoded['status'] ?? null) === 'error'
+        ) {
+            $httpCode = is_array($decoded) && in_array(
+                $decoded['code'] ?? null,
+                [422, 502, 504],
+                true
+            ) ? $decoded['code'] : 502;
+            $message = is_array($decoded) && is_string($decoded['message'] ?? null)
+                ? $decoded['message']
+                : 'LLM provider process returned an invalid response.';
+
+            Log::error('CIA LLM Failure', [
+                'code' => $httpCode,
+                'message' => $message,
+                'stderr' => $process->errorOutput(),
+            ]);
+
+            return $this->errorResponse($message, $httpCode);
+        }
+
+        if (($decoded['status'] ?? null) !== 'success') {
+            Log::error('CIA LLM Failure', [
+                'message' => 'LLM provider process returned an unexpected response.',
+            ]);
+
+            return $this->errorResponse('LLM provider process returned an invalid response.', 502);
+        }
+
+        return response()->json($decoded, 200);
     }
 
     public function careerRecommendations(Request $request): JsonResponse
@@ -576,25 +650,14 @@ class CiaController extends \Illuminate\Routing\Controller
         }
 
         try {
-            $input = json_encode([
-                'model' => env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
-                'temperature' => 0.2,
-                'response_format' => ['type' => 'json_object'],
-                'messages' => [
-                    [
-                        'role' => 'system',
-                        'content' => 'Analyze the skill profile for the target role. Return only a JSON object with string arrays "gaps" and "priority_learning". Identify actionable gaps by comparing candidate scores to target scores.',
-                    ],
-                    [
-                        'role' => 'user',
-                        'content' => json_encode([
-                            'skill_profile' => $skillProfile,
-                            'target_role' => $skillProfile['target_role'],
-                            'radar_data' => $radarData,
-                        ], JSON_THROW_ON_ERROR),
-                    ],
-                ],
-            ], JSON_THROW_ON_ERROR);
+            $prompt = 'Analyze the skill profile for the target role. Return only a JSON object '
+                . 'with string arrays "gaps" and "priority_learning". Identify actionable gaps by '
+                . 'comparing candidate scores to target scores. Profile: '
+                . json_encode([
+                    'skill_profile' => $skillProfile,
+                    'target_role' => $skillProfile['target_role'],
+                    'radar_data' => $radarData,
+                ], JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
             Log::error('Groq skill-gap profile could not be encoded.', [
                 'exception' => $exception->getMessage(),
@@ -606,15 +669,16 @@ class CiaController extends \Illuminate\Routing\Controller
         $process = new Process([
             (string) env('CIA_PYTHON_BINARY', 'python'),
             base_path('scripts/llm_provider_fallback.py'),
+            '--prompt',
+            $prompt,
         ], base_path());
-        $process->setInput($input);
         $process->setEnv([
             'GROQ_API_KEY' => is_string($apiKey) ? $apiKey : '',
             'GROQ_MODEL' => (string) env('GROQ_MODEL', 'llama-3.3-70b-versatile'),
             'OPENROUTER_API_KEY' => is_string($openRouterKey) ? $openRouterKey : '',
             'OPENROUTER_MODEL' => (string) env('OPENROUTER_MODEL', 'openai/gpt-4o-mini'),
         ]);
-        $process->setTimeout(55);
+        $process->setTimeout(15);
 
         try {
             $process->run();
@@ -647,8 +711,16 @@ class CiaController extends \Illuminate\Routing\Controller
             return $this->errorResponse('Skill-gap analysis service returned an invalid response.', 502);
         }
 
-        if (! $process->isSuccessful() || ! is_array($result) || ($result['status'] ?? null) !== 'ok') {
-            $httpStatus = is_array($result) && ($result['http_status'] ?? null) === 504 ? 504 : 502;
+        if (
+            ! $process->isSuccessful()
+            || ! is_array($result)
+            || ($result['status'] ?? null) !== 'success'
+        ) {
+            $httpStatus = is_array($result) && in_array(
+                $result['code'] ?? null,
+                [422, 502, 504],
+                true
+            ) ? $result['code'] : 502;
             Log::warning('CIA LLM provider request failed.', [
                 'http_status' => $httpStatus,
                 'stderr' => $process->getErrorOutput(),
@@ -662,7 +734,8 @@ class CiaController extends \Illuminate\Routing\Controller
             );
         }
 
-        $decoded = json_decode($result['content'] ?? '', true);
+        $responseText = $result['data']['response'] ?? null;
+        $decoded = is_string($responseText) ? json_decode($responseText, true) : null;
         if (
             ! is_array($decoded)
             || ! $this->isStringList($decoded['gaps'] ?? null)

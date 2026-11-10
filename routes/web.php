@@ -3,6 +3,10 @@
 use App\Http\Controllers\CiaController;
 use Illuminate\Support\Facades\Route;
 
+Route::post('/cia/career-fallback', [CiaController::class, 'careerFallback'])
+    ->middleware(['auth', 'throttle:10,1'])
+    ->name('cia.career.fallback');
+
 Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'])
     ->middleware(['auth'])
     ->name('cia.career.skill_gap');
@@ -18,6 +22,10 @@ Route::post('/candidate/cia/career/learning-path', [CiaController::class, 'learn
 Route::post('/candidate/cia/career/vector-search', [CiaController::class, 'vectorSearch'])
     ->middleware(['auth'])
     ->name('cia.career.vector_search');
+
+Route::get('/candidate/cia/career/search-history', [CiaController::class, 'searchHistory'])
+    ->middleware(['auth'])
+    ->name('cia.career.search_history');
 
 Route::prefix('cia/career')
     ->middleware(['auth'])

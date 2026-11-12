@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\CiaController;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 
 Route::post('/candidate/cia/career/skill-gap', [CiaController::class, 'skillGap'])
@@ -28,7 +29,12 @@ Route::prefix('cia/career')
             ]);
         })->name('cia.career.dashboard');
 
-        Route::get('/profiles/{candidate_id}', function (string $candidate_id) {
+        Route::get('/profiles/{candidate_id}', function (Request $request, string $candidate_id) {
+            abort_unless(
+                hash_equals((string) $request->user()->getAuthIdentifier(), $candidate_id),
+                403
+            );
+
             return response()->json([
                 'message' => 'Candidate profile endpoint is ready.',
                 'candidate_id' => $candidate_id,
@@ -41,14 +47,24 @@ Route::prefix('cia/career')
             ], 201);
         })->name('cia.career.profiles.store');
 
-        Route::put('/profiles/{candidate_id}/skills', function (string $candidate_id) {
+        Route::put('/profiles/{candidate_id}/skills', function (Request $request, string $candidate_id) {
+            abort_unless(
+                hash_equals((string) $request->user()->getAuthIdentifier(), $candidate_id),
+                403
+            );
+
             return response()->json([
                 'message' => 'Candidate skills update endpoint is ready.',
                 'candidate_id' => $candidate_id,
             ]);
         })->name('cia.career.profiles.update_skills');
 
-        Route::get('/recommendations/{candidate_id}', function (string $candidate_id) {
+        Route::get('/recommendations/{candidate_id}', function (Request $request, string $candidate_id) {
+            abort_unless(
+                hash_equals((string) $request->user()->getAuthIdentifier(), $candidate_id),
+                403
+            );
+
             return response()->json([
                 'message' => 'Candidate recommendations endpoint is ready.',
                 'candidate_id' => $candidate_id,

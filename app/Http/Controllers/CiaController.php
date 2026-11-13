@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Models\LessonUser;
 use App\Models\QuizAttempt;
+use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -35,29 +36,41 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function skillGap(Request $request): JsonResponse
     {
+        $executionStartedAt = microtime(true);
         $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120'],
         ]);
         if ($validated instanceof JsonResponse) {
-            return $validated;
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, $validated);
         }
 
         $candidateId = $request->user()->getAuthIdentifier();
-        $completedLessons = LessonUser::query()
-            ->join('lessons', 'lessons.id', '=', 'lesson_user.lesson_id')
-            ->where('lesson_user.user_id', $candidateId)
-            ->whereNotNull('lesson_user.completed_at')
-            ->get([
-                'lessons.title',
-                'lessons.module_name',
-                'lesson_user.completed_at',
-            ]);
+        try {
+            $completedLessons = LessonUser::query()
+                ->join('lessons', 'lessons.id', '=', 'lesson_user.lesson_id')
+                ->where('lesson_user.user_id', $candidateId)
+                ->whereNotNull('lesson_user.completed_at')
+                ->get([
+                    'lessons.title',
+                    'lessons.module_name',
+                    'lesson_user.completed_at',
+                ]);
 
-        $quizAttempts = QuizAttempt::query()
-            ->where('user_id', $candidateId)
-            ->whereNotNull('completed_at')
-            ->whereNotNull('score')
-            ->get(['skill', 'score']);
+            $quizAttempts = QuizAttempt::query()
+                ->where('user_id', $candidateId)
+                ->whereNotNull('completed_at')
+                ->whereNotNull('score')
+                ->get(['skill', 'score']);
+        } catch (QueryException $exception) {
+            $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse('Career profile data could not be loaded.', 500)
+            );
+            $this->monitorDatabaseFailure($exception);
+            throw $exception;
+        }
 
         $quizScoresBySkill = $quizAttempts
             ->groupBy(fn (QuizAttempt $attempt): string => Str::lower(trim((string) $attempt->skill)))
@@ -98,21 +111,42 @@ class CiaController extends \Illuminate\Routing\Controller
             'target_scores' => $targetScores,
         ];
         $readinessScore = $this->calculateReadinessScore($candidateScores, $targetScores);
-        $analysis = $this->requestGroqAnalysis($skillProfile, $radarData);
+        $llmTelemetry = [];
+        $analysis = $this->requestGroqAnalysis(
+            (string) $candidateId,
+            $skillProfile,
+            $radarData,
+            $llmTelemetry
+        );
         if ($analysis instanceof JsonResponse) {
-            return $analysis;
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $analysis,
+                $llmTelemetry['provider'] ?? null,
+                (bool) ($llmTelemetry['fallback_triggered'] ?? false)
+            );
         }
 
-        return response()->json([
-            'score' => $readinessScore,
-            'gaps' => $analysis['gaps'],
-            'priority_learning' => $analysis['priority_learning'],
-            'radar_data' => $radarData,
-        ]);
+        return $this->monitorCareerResponse(
+            $request,
+            __FUNCTION__,
+            $executionStartedAt,
+            response()->json([
+                'score' => $readinessScore,
+                'gaps' => $analysis['gaps'],
+                'priority_learning' => $analysis['priority_learning'],
+                'radar_data' => $radarData,
+            ]),
+            $llmTelemetry['provider'] ?? null,
+            (bool) ($llmTelemetry['fallback_triggered'] ?? false)
+        );
     }
 
     public function careerRecommendations(Request $request): JsonResponse
     {
+        $executionStartedAt = microtime(true);
         $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120'],
             'skills' => ['sometimes', 'array', 'max:50'],
@@ -122,7 +156,7 @@ class CiaController extends \Illuminate\Routing\Controller
             'profile' => ['sometimes', 'array'],
         ]);
         if ($validated instanceof JsonResponse) {
-            return $validated;
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, $validated);
         }
 
         $payload = [
@@ -140,7 +174,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse('Unable to prepare recommendation input.', 500);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse('Unable to prepare recommendation input.', 500)
+            );
         }
 
         $process = new Process([
@@ -161,7 +200,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($result['message'], 502, ['log_id' => $logId])
+            );
         } catch (ProcessTimedOutException $exception) {
             $result = ['status' => 'failed', 'message' => 'Career recommendations timed out.'];
             $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
@@ -170,10 +214,15 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse(
-                'Career recommendations timed out. Please try again.',
-                504,
-                ['log_id' => $logId]
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse(
+                    'Career recommendations timed out. Please try again.',
+                    504,
+                    ['log_id' => $logId]
+                )
             );
         } catch (\Throwable $exception) {
             $result = ['status' => 'failed', 'message' => 'Career recommendations could not be generated.'];
@@ -184,7 +233,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($result['message'], 502, ['log_id' => $logId])
+            );
         }
 
         if (! $process->isSuccessful()) {
@@ -197,7 +251,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($result['message'], 502, ['log_id' => $logId])
+            );
         }
 
         try {
@@ -211,10 +270,15 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse(
-                'Career recommendation service returned an invalid response.',
-                502,
-                ['log_id' => $logId]
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse(
+                    'Career recommendation service returned an invalid response.',
+                    502,
+                    ['log_id' => $logId]
+                )
             );
         }
 
@@ -230,19 +294,25 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($failure['message'], 502, ['log_id' => $logId])
+            );
         }
 
         $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
 
-        return response()->json([
+        return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, response()->json([
             'log_id' => $logId,
             'career_paths' => $result['career_paths'],
-        ]);
+        ]));
     }
 
     public function learningPath(Request $request): JsonResponse
     {
+        $executionStartedAt = microtime(true);
         $validated = $this->validateRequest($request, [
             'target_role' => ['required', 'string', 'max:120', 'regex:/\S/'],
             'skills' => ['sometimes', 'array', 'max:50'],
@@ -254,7 +324,7 @@ class CiaController extends \Illuminate\Routing\Controller
             'profile' => ['sometimes', 'array', 'max:50'],
         ]);
         if ($validated instanceof JsonResponse) {
-            return $validated;
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, $validated);
         }
         $candidateId = (string) $request->user()->getAuthIdentifier();
         $input = [
@@ -275,7 +345,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse('Unable to prepare learning path input.', 500);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse('Unable to prepare learning path input.', 500)
+            );
         }
 
         $process = new Process([
@@ -303,7 +378,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($message, 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 502, ['log_id' => $logId])
+            );
         } catch (ProcessTimedOutException $exception) {
             $message = 'Learning path generation timed out. Please try again.';
             $logId = $this->logLearningPath($candidateId, $requestPayload, [
@@ -315,7 +395,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse($message, 504, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 504, ['log_id' => $logId])
+            );
         } catch (\Throwable $exception) {
             $message = 'Learning path could not be generated.';
             $logId = $this->logLearningPath($candidateId, $requestPayload, [
@@ -328,7 +413,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($message, 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 502, ['log_id' => $logId])
+            );
         }
 
         if (! $process->isSuccessful()) {
@@ -344,7 +434,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return $this->errorResponse($message, 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 502, ['log_id' => $logId])
+            );
         }
 
         try {
@@ -361,7 +456,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($message, 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 502, ['log_id' => $logId])
+            );
         }
 
         if (
@@ -388,7 +488,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse($message, 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($message, 502, ['log_id' => $logId])
+            );
         }
 
         $logId = $this->logLearningPath(
@@ -397,17 +502,23 @@ class CiaController extends \Illuminate\Routing\Controller
             ['status' => 'success'] + $result
         );
 
-        return response()->json(['log_id' => $logId] + $result);
+        return $this->monitorCareerResponse(
+            $request,
+            __FUNCTION__,
+            $executionStartedAt,
+            response()->json(['log_id' => $logId] + $result)
+        );
     }
 
     public function vectorSearch(Request $request): JsonResponse
     {
+        $executionStartedAt = microtime(true);
         $validated = $this->validateRequest($request, [
             'skills' => ['required', 'array', 'min:1', 'max:50'],
             'skills.*' => ['required', 'string', 'max:120', 'regex:/\S/'],
         ]);
         if ($validated instanceof JsonResponse) {
-            return $validated;
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, $validated);
         }
         $candidateId = (string) $request->user()->getAuthIdentifier();
         $payload = [
@@ -423,7 +534,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse('Unable to prepare vector-search input.', 500);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse('Unable to prepare vector-search input.', 500)
+            );
         }
 
         $process = new Process([
@@ -450,7 +566,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($failure['message'], 502, ['log_id' => $logId])
+            );
         } catch (ProcessTimedOutException $exception) {
             $result = ['message' => 'Vector search timed out.'];
             $logId = $this->logSearchRequest($candidateId, $payload, $result);
@@ -459,7 +580,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse($result['message'], 504, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($result['message'], 504, ['log_id' => $logId])
+            );
         } catch (\Throwable $exception) {
             $failure = ['message' => 'Vector search could not be completed.'];
             $logId = $this->logSearchRequest($candidateId, $payload, $failure);
@@ -469,7 +595,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($failure['message'], 502, ['log_id' => $logId])
+            );
         }
 
         if (! $process->isSuccessful()) {
@@ -482,7 +613,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'stderr' => $process->getErrorOutput(),
             ]);
 
-            return $this->errorResponse($result['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($result['message'], 502, ['log_id' => $logId])
+            );
         }
 
         try {
@@ -496,7 +632,12 @@ class CiaController extends \Illuminate\Routing\Controller
                 'exception' => $exception->getMessage(),
             ]);
 
-            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($failure['message'], 502, ['log_id' => $logId])
+            );
         }
 
         if (
@@ -512,15 +653,20 @@ class CiaController extends \Illuminate\Routing\Controller
                 'log_id' => $logId,
             ]);
 
-            return $this->errorResponse($failure['message'], 502, ['log_id' => $logId]);
+            return $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse($failure['message'], 502, ['log_id' => $logId])
+            );
         }
 
         $logId = $this->logSearchRequest($candidateId, $payload, $result);
 
-        return response()->json([
+        return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, response()->json([
             'log_id' => $logId,
             'matches' => $result['matches'],
-        ]);
+        ]));
     }
 
     /**
@@ -529,14 +675,19 @@ class CiaController extends \Illuminate\Routing\Controller
      */
     private function logLearningPath(string $candidateId, array $requestPayload, array $results): int
     {
-        return DB::table('cia_search_logs')->insertGetId([
-            'candidate_id' => $candidateId,
-            'target_role' => $requestPayload['target_role'] ?? null,
-            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
-            'results' => json_encode($results, JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        try {
+            return DB::table('cia_search_logs')->insertGetId([
+                'candidate_id' => $candidateId,
+                'target_role' => $requestPayload['target_role'] ?? null,
+                'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+                'results' => json_encode($results, JSON_THROW_ON_ERROR),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (QueryException $exception) {
+            $this->monitorDatabaseFailure($exception);
+            throw $exception;
+        }
     }
 
     /**
@@ -545,14 +696,19 @@ class CiaController extends \Illuminate\Routing\Controller
      */
     private function logSearchRequest(string $candidateId, array $requestPayload, array $results): int
     {
-        return DB::table('cia_search_logs')->insertGetId([
-            'candidate_id' => $candidateId,
-            'target_role' => $requestPayload['target_role'] ?? null,
-            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
-            'results' => json_encode($results, JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        try {
+            return DB::table('cia_search_logs')->insertGetId([
+                'candidate_id' => $candidateId,
+                'target_role' => $requestPayload['target_role'] ?? null,
+                'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+                'results' => json_encode($results, JSON_THROW_ON_ERROR),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (QueryException $exception) {
+            $this->monitorDatabaseFailure($exception);
+            throw $exception;
+        }
     }
 
     /**
@@ -560,17 +716,36 @@ class CiaController extends \Illuminate\Routing\Controller
      * @param  array{labels: list<string>, candidate_scores: list<float>, target_scores: list<int>}  $radarData
      * @return array{gaps: list<string>, priority_learning: list<string>}|JsonResponse
      */
-    private function requestGroqAnalysis(array $skillProfile, array $radarData): array|JsonResponse
+    private function requestGroqAnalysis(
+        string $candidateId,
+        array $skillProfile,
+        array $radarData,
+        ?array &$executionTelemetry = null
+    ): array|JsonResponse
     {
         $fallback = $this->buildMockAnalysis($radarData);
         $apiKey = config('services.groq.api_key') ?: env('GROQ_API_KEY');
         $openRouterKey = config('services.openrouter.api_key') ?: env('OPENROUTER_API_KEY');
+        $executionTelemetry = [
+            'provider' => is_string($apiKey) && trim($apiKey) !== ''
+                ? 'groq'
+                : (is_string($openRouterKey) && trim($openRouterKey) !== '' ? 'openrouter' : 'not_applicable'),
+            'fallback_triggered' => false,
+        ];
+        $executionStartedAt = microtime(true);
 
         if (
             (! is_string($apiKey) || trim($apiKey) === '')
             && (! is_string($openRouterKey) || trim($openRouterKey) === '')
         ) {
             Log::notice('LLM providers are not configured; using mock skill-gap analysis.');
+            $this->logLlmMonitoring(
+                $candidateId,
+                $executionStartedAt,
+                ['provider' => 'mock'],
+                200,
+                ['provider' => 'mock']
+            );
 
             return $fallback;
         }
@@ -619,16 +794,19 @@ class CiaController extends \Illuminate\Routing\Controller
         try {
             $process->run();
         } catch (ProcessStartFailedException $exception) {
+            $this->logLlmMonitoring($candidateId, $executionStartedAt, [], 502);
             Log::error('CIA LLM failover process could not be started.', [
                 'exception' => $exception->getMessage(),
             ]);
 
             return $this->errorResponse('Skill-gap analysis service could not be started.', 502);
         } catch (ProcessTimedOutException $exception) {
+            $this->logLlmMonitoring($candidateId, $executionStartedAt, [], 504);
             Log::warning('CIA LLM failover process timed out.');
 
             return $this->errorResponse('Skill-gap analysis timed out. Please try again.', 504);
         } catch (\Throwable $exception) {
+            $this->logLlmMonitoring($candidateId, $executionStartedAt, [], 502);
             Log::error('CIA LLM failover process could not be completed.', [
                 'exception' => $exception->getMessage(),
             ]);
@@ -639,6 +817,7 @@ class CiaController extends \Illuminate\Routing\Controller
         try {
             $result = json_decode($process->getOutput(), true, 512, JSON_THROW_ON_ERROR);
         } catch (\JsonException $exception) {
+            $this->logLlmMonitoring($candidateId, $executionStartedAt, [], 502);
             Log::error('CIA LLM failover process returned invalid JSON.', [
                 'exception' => $exception->getMessage(),
                 'stderr' => $process->getErrorOutput(),
@@ -647,8 +826,27 @@ class CiaController extends \Illuminate\Routing\Controller
             return $this->errorResponse('Skill-gap analysis service returned an invalid response.', 502);
         }
 
+        $providerTelemetry = is_array($result) && is_array($result['telemetry'] ?? null)
+            ? $result['telemetry']
+            : [];
+        $executionTelemetry = [
+            'provider' => $providerTelemetry['provider']
+                ?? (is_array($result) ? ($result['provider'] ?? 'not_applicable') : 'not_applicable'),
+            'fallback_triggered' => (bool) ($providerTelemetry['fallback_triggered'] ?? false),
+        ];
+
         if (! $process->isSuccessful() || ! is_array($result) || ($result['status'] ?? null) !== 'ok') {
-            $httpStatus = is_array($result) && ($result['http_status'] ?? null) === 504 ? 504 : 502;
+            $providerHttpStatus = is_array($result) ? (int) ($result['http_status'] ?? 0) : 0;
+            $httpStatus = in_array($providerHttpStatus, [429, 502, 504], true)
+                ? $providerHttpStatus
+                : 502;
+            $this->logLlmMonitoring(
+                $candidateId,
+                $executionStartedAt,
+                $providerTelemetry,
+                $httpStatus,
+                is_array($result) ? $result : []
+            );
             Log::warning('CIA LLM provider request failed.', [
                 'http_status' => $httpStatus,
                 'stderr' => $process->getErrorOutput(),
@@ -668,10 +866,25 @@ class CiaController extends \Illuminate\Routing\Controller
             || ! $this->isStringList($decoded['gaps'] ?? null)
             || ! $this->isStringList($decoded['priority_learning'] ?? null)
         ) {
+            $this->logLlmMonitoring(
+                $candidateId,
+                $executionStartedAt,
+                is_array($result['telemetry'] ?? null) ? $result['telemetry'] : [],
+                502,
+                $result
+            );
             Log::warning('LLM skill-gap response had an invalid JSON shape.');
 
             return $this->errorResponse('Skill-gap analysis service returned an invalid response.', 502);
         }
+
+        $this->logLlmMonitoring(
+            $candidateId,
+            $executionStartedAt,
+            is_array($result['telemetry'] ?? null) ? $result['telemetry'] : [],
+            200,
+            $result
+        );
 
         return [
             'gaps' => array_values(array_slice($decoded['gaps'], 0, 10)),
@@ -710,11 +923,12 @@ class CiaController extends \Illuminate\Routing\Controller
 
     public function searchHistory(Request $request): JsonResponse
     {
+        $executionStartedAt = microtime(true);
         $validated = $this->validateRequest($request, [
             'target_role' => ['sometimes', 'string', 'max:120'],
         ]);
         if ($validated instanceof JsonResponse) {
-            return $validated;
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, $validated);
         }
 
         $query = DB::table('cia_search_logs')
@@ -723,12 +937,172 @@ class CiaController extends \Illuminate\Routing\Controller
             $query->where('target_role', trim($validated['target_role']));
         }
 
-        return response()->json([
-            'search_history' => $query
-                ->orderByDesc('created_at')
-                ->limit(50)
-                ->get(['id', 'target_role', 'request_payload', 'results', 'created_at']),
+        try {
+            return $this->monitorCareerResponse($request, __FUNCTION__, $executionStartedAt, response()->json([
+                'search_history' => $query
+                    ->orderByDesc('created_at')
+                    ->limit(50)
+                    ->get(['id', 'target_role', 'request_payload', 'results', 'created_at']),
+            ]));
+        } catch (QueryException $exception) {
+            $this->monitorCareerResponse(
+                $request,
+                __FUNCTION__,
+                $executionStartedAt,
+                $this->errorResponse('Search history could not be loaded.', 500)
+            );
+            $this->monitorDatabaseFailure($exception);
+            throw $exception;
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $telemetry
+     * @param  array<string, mixed>  $result
+     */
+    private function logLlmMonitoring(
+        string $candidateId,
+        float $startedAt,
+        array $telemetry,
+        int $httpStatus,
+        array $result = []
+    ): void {
+        $providerFailures = is_array($result['provider_failures'] ?? null)
+            ? $result['provider_failures']
+            : [];
+        $candidateIdHash = hash('sha256', $candidateId);
+        $event = [
+            'timestamp' => now('UTC')->toIso8601String(),
+            'event' => 'CIA_CAREER_TELEMETRY',
+            'action' => 'skill_gap_llm',
+            'candidate_id_hash' => $candidateIdHash,
+            'execution_started_at' => $telemetry['started_at'] ?? null,
+            'execution_ended_at' => $telemetry['ended_at'] ?? null,
+            'execution_latency_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'provider_latency_ms' => is_numeric($telemetry['duration_ms'] ?? null)
+                ? (float) $telemetry['duration_ms']
+                : null,
+            'provider' => $telemetry['provider'] ?? $result['provider'] ?? null,
+            'llm_provider' => $telemetry['provider'] ?? $result['provider'] ?? 'not_applicable',
+            'model' => $telemetry['model'] ?? null,
+            'llm_token_usage' => is_array($telemetry['token_usage'] ?? null)
+                ? $telemetry['token_usage']
+                : null,
+            'provider_fallback_triggered' => (bool) ($telemetry['fallback_triggered'] ?? false),
+            'fallback_triggered' => (bool) ($telemetry['fallback_triggered'] ?? false),
+            'provider_http_status' => $telemetry['provider_http_status'] ?? null,
+            'primary_provider_http_status' => $telemetry['primary_http_status'] ?? null,
+            'provider_failures' => $providerFailures,
+            'http_status' => $httpStatus,
+            'status_code' => $httpStatus,
+        ];
+        $this->ciaMonitoringLogger()->log(
+            $httpStatus >= 500 ? 'error' : 'info',
+            'CIA_CAREER_TELEMETRY',
+            $event
+        );
+
+        if ($event['provider_fallback_triggered']) {
+            $this->ciaMonitoringLogger()->warning('cia.llm.provider_fallback', $event);
+        }
+
+        $providerStatusCodes = array_filter(
+            $providerFailures,
+            fn ($status): bool => is_numeric($status)
+        );
+        if (
+            count($providerStatusCodes) >= 2
+            || in_array($httpStatus, [429, 502, 504], true)
+            || count(array_intersect([429, 502, 504], array_map('intval', $providerStatusCodes))) > 0
+        ) {
+            $this->ciaAlertLogger()->critical('CRITICAL_ALERT', [
+                'timestamp' => now('UTC')->toIso8601String(),
+                'event' => count($providerStatusCodes) >= 2
+                    ? 'cia.llm.dual_provider_failure'
+                    : 'cia.llm.provider_failure_threshold',
+                'candidate_id_hash' => $candidateIdHash,
+                'http_status' => $httpStatus,
+                'provider_failures' => $providerFailures,
+                'provider_fallback_triggered' => $event['provider_fallback_triggered'],
+            ]);
+        }
+    }
+
+    private function monitorDatabaseFailure(QueryException $exception): void
+    {
+        $errorInfo = $exception->errorInfo;
+        $sqlState = (string) ($errorInfo[0] ?? $exception->getCode());
+        $driverCode = (int) ($errorInfo[1] ?? 0);
+
+        $this->ciaAlertLogger()->critical('CRITICAL_ALERT', [
+            'timestamp' => now('UTC')->toIso8601String(),
+            'event' => 'cia.database.query_exception',
+            'sql_state' => $sqlState,
+            'driver_code' => $driverCode ?: null,
         ]);
+    }
+
+    private function ciaMonitoringLogger(): \Psr\Log\LoggerInterface
+    {
+        return Log::build([
+            'driver' => 'single',
+            'path' => storage_path('logs/cia_monitoring.log'),
+            'level' => 'debug',
+            'formatter' => \Monolog\Formatter\JsonFormatter::class,
+        ]);
+    }
+
+    private function ciaAlertLogger(): \Psr\Log\LoggerInterface
+    {
+        return Log::build([
+            'driver' => 'single',
+            'path' => storage_path('logs/cia_monitoring.log'),
+            'level' => 'critical',
+            'formatter' => \Monolog\Formatter\JsonFormatter::class,
+        ]);
+    }
+
+    private function monitorCareerResponse(
+        Request $request,
+        string $action,
+        float $startedAt,
+        JsonResponse $response,
+        ?string $provider = null,
+        bool $fallbackTriggered = false
+    ): JsonResponse {
+        $user = $request->user();
+        $candidateId = $user ? (string) $user->getAuthIdentifier() : '';
+        $groqKey = config('services.groq.api_key') ?: env('GROQ_API_KEY');
+        $openRouterKey = config('services.openrouter.api_key') ?: env('OPENROUTER_API_KEY');
+        $provider ??= is_string($groqKey) && trim($groqKey) !== ''
+            ? 'groq'
+            : (is_string($openRouterKey) && trim($openRouterKey) !== '' ? 'openrouter' : 'not_applicable');
+        $statusCode = $response->getStatusCode();
+        $event = [
+            'timestamp' => now('UTC')->toIso8601String(),
+            'event' => 'CIA_CAREER_TELEMETRY',
+            'action' => $action,
+            'candidate_id_hash' => hash('sha256', $candidateId),
+            'execution_latency_ms' => (int) round((microtime(true) - $startedAt) * 1000),
+            'llm_provider' => $provider,
+            'fallback_triggered' => $fallbackTriggered,
+            'status_code' => $statusCode,
+        ];
+
+        $level = $fallbackTriggered ? 'warning' : ($statusCode >= 500 ? 'error' : 'info');
+        $this->ciaMonitoringLogger()->log($level, 'CIA_CAREER_TELEMETRY', $event);
+
+        if ($action !== 'skillGap' && in_array($statusCode, [429, 502, 504], true)) {
+            $this->ciaAlertLogger()->critical('CRITICAL_ALERT', [
+                'timestamp' => $event['timestamp'],
+                'event' => 'cia.endpoint.gateway_or_rate_limit_failure',
+                'action' => $action,
+                'candidate_id_hash' => $event['candidate_id_hash'],
+                'status_code' => $statusCode,
+            ]);
+        }
+
+        return $response;
     }
 
     /**

@@ -4,6 +4,8 @@ namespace App\Http\Controllers;
 
 use App\Models\LessonUser;
 use App\Models\QuizAttempt;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -43,21 +45,29 @@ class CiaController extends \Illuminate\Routing\Controller
         }
 
         $candidateId = $request->user()->getAuthIdentifier();
-        $completedLessons = LessonUser::query()
-            ->join('lessons', 'lessons.id', '=', 'lesson_user.lesson_id')
-            ->where('lesson_user.user_id', $candidateId)
-            ->whereNotNull('lesson_user.completed_at')
-            ->get([
-                'lessons.title',
-                'lessons.module_name',
-                'lesson_user.completed_at',
+        try {
+            $completedLessons = LessonUser::query()
+                ->join('lessons', 'lessons.id', '=', 'lesson_user.lesson_id')
+                ->where('lesson_user.user_id', $candidateId)
+                ->whereNotNull('lesson_user.completed_at')
+                ->get([
+                    'lessons.title',
+                    'lessons.module_name',
+                    'lesson_user.completed_at',
+                ]);
+
+            $quizAttempts = QuizAttempt::query()
+                ->where('user_id', $candidateId)
+                ->whereNotNull('completed_at')
+                ->whereNotNull('score')
+                ->get(['skill', 'score']);
+        } catch (QueryException $exception) {
+            Log::error('CIA skill-gap database query failed.', [
+                'exception_class' => $exception::class,
             ]);
 
-        $quizAttempts = QuizAttempt::query()
-            ->where('user_id', $candidateId)
-            ->whereNotNull('completed_at')
-            ->whereNotNull('score')
-            ->get(['skill', 'score']);
+            return $this->errorResponse('Unable to load career data.', 500);
+        }
 
         $quizScoresBySkill = $quizAttempts
             ->groupBy(fn (QuizAttempt $attempt): string => Str::lower(trim((string) $attempt->skill)))
@@ -103,12 +113,12 @@ class CiaController extends \Illuminate\Routing\Controller
             return $analysis;
         }
 
-        return response()->json([
+        return $this->telemetryResponse(response()->json([
             'score' => $readinessScore,
             'gaps' => $analysis['gaps'],
             'priority_learning' => $analysis['priority_learning'],
             'radar_data' => $radarData,
-        ]);
+        ]));
     }
 
     public function careerRecommendations(Request $request): JsonResponse
@@ -235,10 +245,10 @@ class CiaController extends \Illuminate\Routing\Controller
 
         $logId = $this->logSearchRequest($payload['candidate_id'], $payload, $result);
 
-        return response()->json([
+        return $this->telemetryResponse(response()->json([
             'log_id' => $logId,
             'career_paths' => $result['career_paths'],
-        ]);
+        ]));
     }
 
     public function learningPath(Request $request): JsonResponse
@@ -397,7 +407,7 @@ class CiaController extends \Illuminate\Routing\Controller
             ['status' => 'success'] + $result
         );
 
-        return response()->json(['log_id' => $logId] + $result);
+        return $this->telemetryResponse(response()->json(['log_id' => $logId] + $result));
     }
 
     public function vectorSearch(Request $request): JsonResponse
@@ -517,10 +527,10 @@ class CiaController extends \Illuminate\Routing\Controller
 
         $logId = $this->logSearchRequest($candidateId, $payload, $result);
 
-        return response()->json([
+        return $this->telemetryResponse(response()->json([
             'log_id' => $logId,
             'matches' => $result['matches'],
-        ]);
+        ]));
     }
 
     /**
@@ -529,14 +539,7 @@ class CiaController extends \Illuminate\Routing\Controller
      */
     private function logLearningPath(string $candidateId, array $requestPayload, array $results): int
     {
-        return DB::table('cia_search_logs')->insertGetId([
-            'candidate_id' => $candidateId,
-            'target_role' => $requestPayload['target_role'] ?? null,
-            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
-            'results' => json_encode($results, JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        return $this->persistSearchLog($candidateId, $requestPayload, $results);
     }
 
     /**
@@ -545,14 +548,33 @@ class CiaController extends \Illuminate\Routing\Controller
      */
     private function logSearchRequest(string $candidateId, array $requestPayload, array $results): int
     {
-        return DB::table('cia_search_logs')->insertGetId([
-            'candidate_id' => $candidateId,
-            'target_role' => $requestPayload['target_role'] ?? null,
-            'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
-            'results' => json_encode($results, JSON_THROW_ON_ERROR),
-            'created_at' => now(),
-            'updated_at' => now(),
-        ]);
+        return $this->persistSearchLog($candidateId, $requestPayload, $results);
+    }
+
+    /**
+     * @param  array<string, mixed>  $requestPayload
+     * @param  array<string, mixed>  $results
+     */
+    private function persistSearchLog(string $candidateId, array $requestPayload, array $results): int
+    {
+        try {
+            return DB::table('cia_search_logs')->insertGetId([
+                'candidate_id' => $candidateId,
+                'target_role' => $requestPayload['target_role'] ?? null,
+                'request_payload' => json_encode($requestPayload, JSON_THROW_ON_ERROR),
+                'results' => json_encode($results, JSON_THROW_ON_ERROR),
+                'created_at' => now(),
+                'updated_at' => now(),
+            ]);
+        } catch (QueryException $exception) {
+            Log::error('CIA career search log could not be persisted.', [
+                'exception_class' => $exception::class,
+            ]);
+
+            throw new HttpResponseException(
+                $this->errorResponse('Unable to save career intelligence results.', 500)
+            );
+        }
     }
 
     /**
@@ -688,11 +710,11 @@ class CiaController extends \Illuminate\Routing\Controller
         try {
             return $request->validate($rules);
         } catch (ValidationException $exception) {
-            return response()->json([
+            return $this->telemetryResponse(response()->json([
                 'status' => 'error',
                 'message' => 'The provided data is invalid.',
                 'errors' => $exception->errors(),
-            ], 422);
+            ], 422));
         }
     }
 
@@ -701,11 +723,26 @@ class CiaController extends \Illuminate\Routing\Controller
      */
     private function errorResponse(string $message, int $status, array $extra = []): JsonResponse
     {
-        return response()->json([
+        return $this->telemetryResponse(response()->json([
             'status' => 'error',
             'message' => $message,
             ...$extra,
-        ], $status);
+        ], $status));
+    }
+
+    private function telemetryResponse(JsonResponse $response): JsonResponse
+    {
+        $request = request();
+        $status = $response->getStatusCode();
+        $level = $status >= 500 ? 'error' : ($status >= 400 ? 'warning' : 'info');
+
+        Log::log($level, 'CIA_CAREER_TELEMETRY', [
+            'route_name' => $request->route()?->getName(),
+            'http_method' => $request->method(),
+            'http_status' => $status,
+        ]);
+
+        return $response;
     }
 
     public function searchHistory(Request $request): JsonResponse
@@ -723,12 +760,20 @@ class CiaController extends \Illuminate\Routing\Controller
             $query->where('target_role', trim($validated['target_role']));
         }
 
-        return response()->json([
-            'search_history' => $query
+        try {
+            $history = $query
                 ->orderByDesc('created_at')
                 ->limit(50)
-                ->get(['id', 'target_role', 'request_payload', 'results', 'created_at']),
-        ]);
+                ->get(['id', 'target_role', 'request_payload', 'results', 'created_at']);
+        } catch (QueryException $exception) {
+            Log::error('CIA search-history database query failed.', [
+                'exception_class' => $exception::class,
+            ]);
+
+            return $this->errorResponse('Unable to load search history.', 500);
+        }
+
+        return $this->telemetryResponse(response()->json(['search_history' => $history]));
     }
 
     /**

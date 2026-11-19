@@ -436,7 +436,9 @@ session; do not send a candidate ID in the request.
 }
 ```
 
-`target_role` is required and must be a string of at most 120 characters.
+`target_role` is required, must contain a non-whitespace character, and must
+be at most 120 characters. Requests containing only whitespace return
+`422 Unprocessable Entity`.
 
 ### `200 OK`
 
@@ -477,7 +479,7 @@ benchmark-based suggestions.
 
 The original routes use the common error examples below. Laravel validation
 for the skill-gap request returns `422 Unprocessable Entity` when
-`target_role` is missing or invalid.
+`target_role` is missing, blank, or invalid.
 
 ### `400 Bad Request`
 

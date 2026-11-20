@@ -36,7 +36,7 @@ class CiaController extends \Illuminate\Routing\Controller
     public function skillGap(Request $request): JsonResponse
     {
         $validated = $this->validateRequest($request, [
-            'target_role' => ['required', 'string', 'max:120'],
+            'target_role' => ['required', 'string', 'max:120', 'regex:/\S/'],
         ]);
         if ($validated instanceof JsonResponse) {
             return $validated;
@@ -114,7 +114,7 @@ class CiaController extends \Illuminate\Routing\Controller
     public function careerRecommendations(Request $request): JsonResponse
     {
         $validated = $this->validateRequest($request, [
-            'target_role' => ['required', 'string', 'max:120'],
+            'target_role' => ['required', 'string', 'max:120', 'regex:/\S/'],
             'skills' => ['sometimes', 'array', 'max:50'],
             'skills.*' => ['string', 'max:120'],
             'skill_gaps' => ['sometimes', 'array', 'max:50'],

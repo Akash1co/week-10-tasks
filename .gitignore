@@ -1,1 +1,4 @@
 /storage/app/chromadb/
+
+__pycache__/
+storage/chroma_db/
